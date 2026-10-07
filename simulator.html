@@ -1,0 +1,1845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🌾 ESP32-CAM Agricultural Surveillance Simulator & State Inspector</title>
+<!-- Three.js and OrbitControls via CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+:root {
+  /* Soft, warm, cartoonish palette (warm parchment & earth tones) */
+  --bg-main:    #f5f0e6;
+  --bg-card:    #ffffff;
+  --bg-tint:    #ede7d8;
+  --border:     #d7cebe;
+  --border-dark:#bcaf98;
+  --text:       #383228;
+  --text-muted: #796e60;
+  --primary:    #e07a3c;  /* warm terracotta */
+  --primary-h:  #cb6b30;
+  --green:      #4e8a56;  /* meadow green */
+  --green-h:    #407547;
+  --blue:       #4c82a6;  /* river blue */
+  --yellow:     #e5a93b;  /* warm sunlight */
+  --red:        #c94a44;  /* brick red */
+  --shadow:     0 3px 10px rgba(56, 50, 42, 0.08);
+  --r:          10px;
+  --r-sm:       6px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Nunito", sans-serif;
+  background: var(--bg-main);
+  color: var(--text);
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Top Header ── */
+header {
+  background: var(--bg-card);
+  border-bottom: 2px solid var(--border);
+  padding: 8px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+  z-index: 20;
+}
+header h1 {
+  font-size: 15px; font-weight: 800; color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+.pill {
+  font-size: 11px; font-weight: 700; padding: 3px 10px;
+  border-radius: 99px; background: var(--bg-tint); color: var(--text-muted);
+  border: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.5px;
+}
+.pill.active { background: #e6f3e8; color: var(--green); border-color: #aed9b5; }
+.pill.alert  { background: #fde8e7; color: var(--red); border-color: #f6b5b2; }
+.dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--border-dark);
+  display: inline-block; transition: all 0.25s ease;
+}
+.dot.on { background: var(--green); box-shadow: 0 0 0 3px rgba(78, 138, 86, 0.25); }
+.dot.alert { background: var(--red); box-shadow: 0 0 0 3px rgba(201, 74, 68, 0.25); }
+
+/* ── Main Layout: 3 Columns + Bottom Timeline ── */
+.app-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 280px 1fr 350px;
+  overflow: hidden;
+  position: relative;
+}
+
+.panel {
+  background: var(--bg-card);
+  border-right: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.panel:last-child {
+  border-right: none;
+  border-left: 2px solid var(--border);
+}
+.panel-head {
+  padding: 10px 14px;
+  background: var(--bg-tint);
+  border-bottom: 2px solid var(--border);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.panel-scroll::-webkit-scrollbar { width: 6px; }
+.panel-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+/* ── Soft Cards & Form Fields ── */
+.card {
+  background: var(--bg-main);
+  border: 2px solid var(--border);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.card-head {
+  font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.field { margin-bottom: 8px; }
+.field:last-child { margin-bottom: 0; }
+.field label {
+  display: block; font-size: 10px; font-weight: 700;
+  color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.4px;
+}
+input[type=text], input[type=number], input[type=url], select {
+  width: 100%; background: #ffffff; border: 2px solid var(--border);
+  border-radius: var(--r-sm); color: var(--text); padding: 6px 9px;
+  font-size: 12px; font-weight: 600; outline: none; font-family: inherit;
+  transition: all 0.15s ease;
+}
+input:focus, select:focus {
+  border-color: var(--primary); background: #fffcf8;
+}
+
+/* ── Buttons ── */
+.btn {
+  border: 2px solid transparent; border-radius: var(--r-sm);
+  padding: 6px 12px; font-size: 12px; font-weight: 700;
+  cursor: pointer; transition: all 0.1s ease;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-family: inherit; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.btn:active { transform: translateY(1px); box-shadow: none; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary-h); }
+.btn-primary:hover:not(:disabled) { background: var(--primary-h); }
+.btn-green   { background: var(--green);   color: #fff; border-color: var(--green-h); }
+.btn-green:hover:not(:disabled)   { background: var(--green-h); }
+.btn-ghost   { background: #ffffff; color: var(--text); border-color: var(--border); }
+.btn-ghost:hover:not(:disabled) { background: var(--bg-tint); }
+
+/* ── Center Viewports: 3D Scene + Camera Sensor ── */
+.viewport-area {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #252b23;
+  position: relative;
+}
+.viewport-split {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 3D Scene Box */
+#scene3d-box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.scene-overlay-badge {
+  position: absolute; top: 12px; left: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 2px solid var(--border); border-radius: 99px;
+  padding: 4px 12px; font-size: 11px; font-weight: 800;
+  color: var(--text); box-shadow: var(--shadow); z-index: 5;
+  display: flex; align-items: center; gap: 6px; pointer-events: none;
+}
+.pir-badge {
+  position: absolute; top: 12px; right: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 2px solid var(--border); border-radius: 99px;
+  padding: 4px 12px; font-size: 11px; font-weight: 800;
+  color: var(--text-muted); box-shadow: var(--shadow); z-index: 5;
+  display: flex; align-items: center; gap: 6px; pointer-events: none;
+}
+.pir-badge.triggered {
+  background: #fbeae8; border-color: #f1b3af; color: var(--red);
+}
+
+/* Camera Sensor Viewport (640x480) */
+.cam-feed-panel {
+  border-left: 2px solid var(--border);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cam-feed-head {
+  padding: 8px 12px;
+  background: var(--bg-tint);
+  border-bottom: 2px solid var(--border);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cam-feed-view {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #141713;
+  padding: 10px;
+  position: relative;
+  overflow: hidden;
+}
+.cam-canvas-wrap {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  position: relative;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: #1a221a;
+}
+#cam-canvas {
+  width: 100%; height: 100%; display: block;
+}
+#cam-hud-canvas {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.cam-feed-status {
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-top: 2px solid var(--border);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── Telemetry & Inspector Rows ── */
+.meter-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 0; border-bottom: 1px dashed var(--border); font-size: 11px;
+}
+.meter-row:last-child { border-bottom: none; }
+.mk { color: var(--text-muted); font-weight: 600; }
+.mv { font-weight: 800; font-family: 'Cascadia Code', Consolas, monospace; }
+.mv.green  { color: var(--green); }
+.mv.orange { color: var(--primary); }
+.mv.blue   { color: var(--blue); }
+.mv.red    { color: var(--red); }
+
+/* In-Memory State JSON Code Block */
+pre.state-box {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text);
+  overflow-x: auto;
+  margin-top: 6px;
+}
+
+/* ── Bottom Timeline & Step-by-Step Controller ── */
+.timeline-bar {
+  background: var(--bg-card);
+  border-top: 2px solid var(--border);
+  padding: 8px 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 66px;
+  flex-shrink: 0;
+  box-shadow: 0 -2px 8px rgba(0,0,0,0.03);
+  z-index: 20;
+}
+.playback-group {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.time-display {
+  display: flex; flex-direction: column; justify-content: center;
+  min-width: 120px; flex-shrink: 0;
+}
+.time-val {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 16px; font-weight: 800; color: var(--primary);
+}
+.time-sub {
+  font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;
+}
+.scrubber-wrap {
+  flex: 1; display: flex; flex-direction: column; gap: 4px; position: relative;
+}
+.scrubber-track {
+  width: 100%; accent-color: var(--primary); cursor: pointer; height: 6px;
+}
+.timeline-markers {
+  position: relative; width: 100%; height: 14px; font-size: 9px;
+  color: var(--text-muted); font-weight: 700;
+}
+.tl-mark {
+  position: absolute; transform: translateX(-50%); white-space: nowrap;
+}
+
+.speed-group {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+}
+.speed-btn {
+  background: var(--bg-tint); border: 1px solid var(--border);
+  border-radius: 4px; font-size: 10px; font-weight: 800; padding: 4px 7px;
+  cursor: pointer; color: var(--text-muted);
+}
+.speed-btn.active {
+  background: var(--primary); color: #fff; border-color: var(--primary-h);
+}
+
+/* Screen strobe alert */
+#screen-strobe {
+  position: absolute; inset: 0; pointer-events: none; z-index: 10;
+  background: rgba(255, 255, 230, 0); transition: background 0.08s ease;
+}
+#screen-strobe.active { background: rgba(255, 255, 230, 0.35); }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="dot on" id="sys-dot"></div>
+  <h1><span>🌾</span> Agricultural ESP32-CAM Simulator &amp; Backend State Inspector</h1>
+  <div class="pill active" id="sys-mode-pill">Standby · t=0.0s</div>
+  <div class="pill" id="backend-status-pill">Backend: Checking...</div>
+  <div style="flex:1;"></div>
+  <div style="font-size:11px; font-weight:700; color:var(--text-muted);">
+    AWS Graviton · OpenCV 5 DNN · CameraState
+  </div>
+</header>
+
+<!-- App Body -->
+<div class="app-body">
+
+  <!-- ════ LEFT PANEL: CONTROLS & HARDWARE ════ -->
+  <div class="panel">
+    <div class="panel-head">
+      <span>⚙️ Target &amp; Hardware</span>
+    </div>
+    <div class="panel-scroll">
+
+      <!-- 17 Species Selection -->
+      <div class="card">
+        <div class="card-head">Wild Animal Species (17 Classes)</div>
+        <div class="field">
+          <label>Species</label>
+          <select id="sel-species" onchange="onSpeciesChange(this.value)">
+            <option value="Leopard" selected>🐆 Amur Leopard (Class 6)</option>
+            <option value="AmurTiger">🐅 Amur Tiger (Class 0)</option>
+            <option value="Badger">🦡 Badger (Class 1)</option>
+            <option value="BlackBear">🐻 Black Bear (Class 2)</option>
+            <option value="Cow">🐄 Cow (Class 3)</option>
+            <option value="Dog">🐕 Dog (Class 4)</option>
+            <option value="Hare">🐇 Hare (Class 5)</option>
+            <option value="LeopardCat">🐈 Leopard Cat (Class 7)</option>
+            <option value="MuskDeer">🦌 Musk Deer (Class 8)</option>
+            <option value="RaccoonDog">🦝 Raccoon Dog (Class 9)</option>
+            <option value="RedFox">🦊 Red Fox (Class 10)</option>
+            <option value="RoeDeer">🦌 Roe Deer (Class 11)</option>
+            <option value="Sable">🦦 Sable (Class 12)</option>
+            <option value="SikaDeer">🦌 Sika Deer (Class 13)</option>
+            <option value="Weasel">🪵 Weasel (Class 14)</option>
+            <option value="WildBoar">🐗 Wild Boar (Class 15)</option>
+            <option value="Y-T-Marten">🌲 Yellow-Throated Marten (Class 16)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Timeline Scenario Guide -->
+      <div class="card">
+        <div class="card-head">Timeline Progression Guide</div>
+        <div style="font-size:11px; line-height:1.5; color:var(--text-muted);">
+          • <strong>t = 0.0s to 1.0s:</strong> Animal is outside PIR zone ($d > 8\text{m}$). Camera &amp; light are <strong>OFF (Sleep)</strong>.<br/>
+          • <strong>t = 1.1s:</strong> Animal crosses into PIR zone ($d = 7.7\text{m} \le 8\text{m}$) &rarr; Light switches <strong>ON</strong> &rarr; Camera wakes up!<br/>
+          • <strong>t = 1.2s to 4.5s:</strong> Camera streams frames &rarr; Backend runs 3-layer servo math &rarr; Gimbal follows animal.<br/>
+          • <strong>t &ge; 4.5s:</strong> Deterrent sound fires &rarr; Animal flees crop area.
+        </div>
+      </div>
+
+      <!-- Hardware Components -->
+      <div class="card">
+        <div class="card-head">Gimbal &amp; Actuators</div>
+        <div class="meter-row">
+          <span class="mk">Pan Servo Range</span>
+          <span class="mv">-90.0° to +90.0°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Tilt Servo Range</span>
+          <span class="mv">-30.0° to +30.0°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Slew Rate (Speed)</span>
+          <span class="mv orange">280.0°/sec</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Deadzone Window</span>
+          <span class="mv green">20.0 px (Hold Position)</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Deterrent Audio Horn</span>
+          <span><input type="checkbox" id="chk-audio" checked /> Enable Audio</span>
+        </div>
+      </div>
+
+      <!-- Backend Connection -->
+      <div class="card">
+        <div class="card-head">Inference Service</div>
+        <div class="field">
+          <label>Backend URL</label>
+          <input type="url" id="cfg-url" value="http://localhost:8000" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input type="text" id="cfg-key" value="08af8f9128cdb5eb5bb045f19a41a558868be2ba0b0026c9cb5734406601b117" />
+        </div>
+        <div class="field">
+          <label>Architecture Mode</label>
+          <select id="cfg-mode" style="width:100%; padding:6px; font-weight:700; border-radius:4px; border:1px solid var(--border-dark); background:var(--bg-main);">
+            <option value="push_poll" selected>🚀 Push / Poll Decoupled (80ms Servo / 400ms Action)</option>
+            <option value="sync">🔄 Synchronous /infer (Direct Request-Response)</option>
+          </select>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════ CENTER VIEWPORTS: 3D WORLD + CAMERA SENSOR FEED ════ -->
+  <div class="viewport-area">
+    <div id="screen-strobe"></div>
+
+    <div class="viewport-split">
+      <!-- 3D World Scene -->
+      <div id="scene3d-box">
+        <div class="scene-overlay-badge">
+          <span>🌿</span> 3D Farm Field &amp; Hardware Assembly
+        </div>
+        <div class="pir-badge" id="pir-hud-badge">
+          <span>🌱</span> PIR Standby · Camera Sleeping
+        </div>
+      </div>
+
+      <!-- ESP32-CAM Sensor Viewport (640x480) -->
+      <div class="cam-feed-panel">
+        <div class="cam-feed-head">
+          <span>📷 ESP32-CAM Sensor (640×480)</span>
+          <span id="cam-fps-pill" class="pill" style="font-size:10px;">IDLE</span>
+        </div>
+        <div class="cam-feed-view">
+          <div class="cam-canvas-wrap">
+            <canvas id="cam-canvas" width="640" height="480"></canvas>
+            <canvas id="cam-hud-canvas" width="640" height="480"></canvas>
+          </div>
+        </div>
+        <div class="cam-feed-status">
+          <div style="display:flex; justify-content:space-between;">
+            <span style="font-weight:700; color:var(--text-muted);">Optical State:</span>
+            <span id="cam-optical-state" style="font-weight:800; color:var(--text-muted);">SLEEP (STANDBY)</span>
+          </div>
+          <div style="display:flex; justify-content:space-between;">
+            <span style="font-weight:700; color:var(--text-muted);">Target Offset Error:</span>
+            <span id="cam-target-error" style="font-weight:800; font-family:monospace;">ΔX: 0px, ΔY: 0px</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════ RIGHT PANEL: IN-MEMORY STATE & PIPELINE INSPECTOR ════ -->
+  <div class="panel">
+    <div class="panel-head">
+      <span>🔬 In-Memory State &amp; Pipeline</span>
+    </div>
+    <div class="panel-scroll">
+
+      <!-- 1. Exact In-Memory CameraState Structure -->
+      <div class="card">
+        <div class="card-head">
+          <span>🧠 Backend CameraState (In-Memory)</span>
+          <span style="font-size:9px; color:var(--text-muted);">state.py</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">phase</span>
+          <span class="mv blue" id="cs-phase">Phase.sweeping</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">frames_without_detection</span>
+          <span class="mv" id="cs-fnd">0</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">active_action</span>
+          <span class="mv orange" id="cs-action">Action.none</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">action_frames_remaining</span>
+          <span class="mv" id="cs-afr">0</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">sweep_step</span>
+          <span class="mv" id="cs-sweep">0</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">prev_bbox_center</span>
+          <span class="mv" id="cs-pbc">None</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">prev_frame_ts</span>
+          <span class="mv" id="cs-pts">0.000</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">last_pan_absolute</span>
+          <span class="mv blue" id="cs-lpa">0.00°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">last_tilt_absolute</span>
+          <span class="mv blue" id="cs-lta">0.00°</span>
+        </div>
+
+        <pre class="state-box" id="cs-json-box">Loading state...</pre>
+      </div>
+
+      <!-- 2. Outgoing Frame Packet from ESP32 -->
+      <div class="card">
+        <div class="card-head">📤 Outgoing ESP32-CAM Packet</div>
+        <div class="meter-row">
+          <span class="mk">Transmission State</span>
+          <span class="mv" id="pkt-status">SLEEP (NO PACKET)</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Pan Angle At Capture</span>
+          <span class="mv blue" id="pkt-pan">0.00°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Tilt Angle At Capture</span>
+          <span class="mv blue" id="pkt-tilt">0.00°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">PIR Hardware Trigger</span>
+          <span class="mv" id="pkt-pir">CLEAR</span>
+        </div>
+      </div>
+
+      <!-- 3. Backend Detection & Math Engine -->
+      <div class="card">
+        <div class="card-head">🎯 RF-DETR Detection &amp; Servo Math</div>
+        <div class="meter-row">
+          <span class="mk">Detected Class</span>
+          <span class="mv orange" id="det-cls">None</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Confidence</span>
+          <span class="mv" id="det-conf">—</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Layer 1: Deadzone (20px)</span>
+          <span class="mv" id="math-l1">Holding</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Layer 2: Velocity Comp</span>
+          <span class="mv" id="math-l2">ΔX: 0px, ΔY: 0px</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Layer 3: Absolute Target</span>
+          <span class="mv orange" id="math-l3">Pan: 0.0°, Tilt: 0.0°</span>
+        </div>
+      </div>
+
+      <!-- 4. Physical Motor Slew Lag -->
+      <div class="card">
+        <div class="card-head">⚙️ Physical Motor Kinematics</div>
+        <div class="meter-row">
+          <span class="mk">Physical Pan Angle</span>
+          <span class="mv blue" id="act-pan">0.00°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Physical Tilt Angle</span>
+          <span class="mv blue" id="act-tilt">0.00°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Remaining Slew Lag</span>
+          <span class="mv" id="act-lag">0.00°</span>
+        </div>
+        <div class="meter-row">
+          <span class="mk">Motor Slew Status</span>
+          <span class="mv green" id="act-status">HOLDING</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- ════ BOTTOM TIMELINE & STEP-BY-STEP CONTROLLER ════ -->
+<div class="timeline-bar">
+  <div class="playback-group">
+    <button class="btn btn-primary" id="btn-play" onclick="togglePlay()">
+      <span id="play-icon">▶</span> <span id="play-text">Auto Play (Slow)</span>
+    </button>
+    <button class="btn btn-ghost" title="Step Back -0.1s" onclick="stepTime(-0.1)">
+      ⏮ -0.1s
+    </button>
+    <button class="btn btn-green" id="btn-step" title="Step Forward +0.1s (1 Frame)" onclick="stepTime(0.1)">
+      ⏭ Step (+0.1s)
+    </button>
+    <button class="btn btn-ghost" title="Reset Time to 0.0s" onclick="resetTime()">
+      ↺ Reset (t=0)
+    </button>
+  </div>
+
+  <div class="time-display">
+    <div class="time-val" id="disp-time">0.00s</div>
+    <div class="time-sub">Frame #<span id="disp-frame">0</span> | Step Time</div>
+  </div>
+
+  <!-- Timeline Scrubber with exact CSS percentage markers -->
+  <div class="scrubber-wrap">
+    <input type="range" class="scrubber-track" id="time-scrubber" min="0" max="10" step="0.1" value="0" oninput="onScrubTime(parseFloat(this.value))" />
+    <div class="timeline-markers">
+      <span class="tl-mark" style="left:0%;">t=0.0s (Outside PIR)</span>
+      <span class="tl-mark" style="left:11%; color:var(--primary); font-weight:800;">▲ t=1.1s (PIR Wake)</span>
+      <span class="tl-mark" style="left:50%;">t=5.0s (Deterrent Bursts)</span>
+      <span class="tl-mark" style="left:100%;">t=10.0s (End)</span>
+    </div>
+  </div>
+
+  <div class="speed-group">
+    <button class="speed-btn active" onclick="setSpeed(0.5, this)">0.5x Slow</button>
+    <button class="speed-btn" onclick="setSpeed(1.0, this)">1.0x</button>
+    <button class="speed-btn" onclick="setSpeed(2.0, this)">2.0x</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<!-- APPLICATION LOGIC: PRISTINE SENSOR RENDERING, THREE.JS 3D SCENE & SYNC -->
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<script>
+// ── Web Audio Deterrent Synthesizer ──────────────────────────────────────────
+const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+let audioEngine = null;
+
+function playSoundFromBackend(actionType) {
+  if (!document.getElementById('chk-audio').checked) return;
+  try {
+    if (!audioEngine) audioEngine = new AudioContextClass();
+    if (audioEngine.state === 'suspended') audioEngine.resume();
+    const t = audioEngine.currentTime;
+
+    if (actionType === 'BARK_SOUND') {
+      for (let i = 0; i < 3; i++) {
+        const osc = audioEngine.createOscillator();
+        const gain = audioEngine.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(170 - i * 22, t + i * 0.12);
+        osc.frequency.exponentialRampToValueAtTime(45, t + i * 0.12 + 0.09);
+
+        gain.gain.setValueAtTime(0.3, t + i * 0.12);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + i * 0.12 + 0.09);
+
+        osc.connect(gain);
+        gain.connect(audioEngine.destination);
+        osc.start(t + i * 0.12);
+        osc.stop(t + i * 0.12 + 0.1);
+      }
+    }
+  } catch (e) {
+    console.warn('Audio note:', e);
+  }
+}
+
+// ── Master Simulation State Mirroring Backend CameraState ────────────────────
+const Sim = {
+  // Timeline Clock (10s total, discrete 0.1s steps)
+  currentTime: 0.0,
+  maxTime: 10.0,
+  isPlaying: false,
+  playbackSpeed: 0.5,
+  frameIndex: 0,
+
+  // Hardware State: PIR Motion Sensor
+  pirDetected: false,
+  systemActive: false, // true when light is ON and camera is streaming
+  activeHoldTimer: 0.0,
+
+  // Physical Servos: Commanded Target vs Current Physical Angle (degrees)
+  currentPan: 0.0,
+  currentTilt: 0.0,
+  targetPan: 0.0,
+  targetTilt: 0.0,
+  slewRate: 280.0, // deg/sec physical servo speed
+
+  // Wildlife Target
+  species: 'Leopard',
+  animalPos: new THREE.Vector3(-4.0, 0.45, -10.0), // starts outside 8m at t=0
+  animalSpeed: 1.8,
+  isFleeing: false,
+
+  // Exact In-Memory CameraState Mirror (from inference_service/state.py)
+  cameraState: {
+    phase: 'sweeping',
+    frames_without_detection: 0,
+    active_action: 'none',
+    action_frames_remaining: 0,
+    sweep_step: 0,
+    prev_bbox_center: null,
+    prev_frame_ts: 0.0,
+    last_pan_absolute: 0.0,
+    last_tilt_absolute: 0.0,
+  },
+
+  // Telemetry & Flags
+  lastDetection: null,
+  isInferring: false,
+  backendOnline: false,
+};
+
+// ── Three.js 3D Virtual Scene Setup ──────────────────────────────────────────
+const sceneBox = document.getElementById('scene3d-box');
+const scene = new THREE.Scene();
+
+// Warm soft sky background (no heavy fog that washes out camera)
+scene.background = new THREE.Color(0xdce7da);
+
+// External Camera & OrbitControls (sees layer 0 and layer 1)
+const externalCam = new THREE.PerspectiveCamera(45, sceneBox.clientWidth / sceneBox.clientHeight, 0.1, 100);
+externalCam.position.set(0, 3.2, 7.5);
+externalCam.layers.enable(0);
+externalCam.layers.enable(1); // sees helpers / PIR cone
+externalCam.layers.enable(2); // sees hardware mount & servos
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(sceneBox.clientWidth, sceneBox.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+sceneBox.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(externalCam, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI / 2 - 0.05;
+controls.target.set(0, 1.2, 0);
+
+// Hardware WebGL RenderTarget for ESP32-CAM Sensor View (Direct GPU Render via primary renderer)
+const camCanvas = document.getElementById('cam-canvas');
+const camCtx = camCanvas.getContext('2d');
+const sensorRenderTarget = new THREE.WebGLRenderTarget(640, 480, {
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  format: THREE.RGBAFormat,
+});
+const pixelBuffer = new Uint8Array(640 * 480 * 4);
+const imgData = camCtx.createImageData(640, 480);
+const rowBytes = 640 * 4;
+
+// ESP32-CAM Sensor Camera (OV2640 pinhole: 50° VFOV / 66° HFOV)
+// Layers: sensorCam ONLY sees Layer 0 (the real world), NEVER wireframe helpers or mount body!
+const sensorCam = new THREE.PerspectiveCamera(50.0, 640 / 480, 0.1, 100);
+sensorCam.layers.set(0);
+
+// ── Environment Lighting ─────────────────────────────────────────────────────
+const ambLight = new THREE.HemisphereLight(0xfffaed, 0x5a6d54, 0.75);
+scene.add(ambLight);
+
+const sunLight = new THREE.DirectionalLight(0xfff6dd, 0.85);
+sunLight.position.set(12, 16, 10);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 1024;
+sunLight.shadow.mapSize.height = 1024;
+scene.add(sunLight);
+
+// Ground (Soft cartoonish farm terrain)
+const groundGeo = new THREE.PlaneGeometry(60, 60, 16, 16);
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0x6e9b5f,  // soft grass green
+  roughness: 0.85,
+  metalness: 0.05,
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Crop rows (stylized soft ridges)
+const cropMat = new THREE.MeshStandardMaterial({ color: 0x567e49, roughness: 0.9 });
+for (let z = -12; z <= -3; z += 1.8) {
+  const row = new THREE.Mesh(new THREE.BoxGeometry(32, 0.15, 0.8), cropMat);
+  row.position.set(0, 0.08, z);
+  row.receiveShadow = true;
+  scene.add(row);
+}
+
+// Perimeter Fence with wooden posts
+const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8b6540, roughness: 0.8 });
+for (let x = -18; x <= 18; x += 3.5) {
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 1.4, 10), fenceMat);
+  post.position.set(x, 0.7, -13);
+  post.castShadow = true;
+  scene.add(post);
+}
+
+// ── Physical Hardware Mount Assembly ─────────────────────────────────────────
+const hardwareRoot = new THREE.Group();
+hardwareRoot.position.set(0, 0, 0);
+
+// Wooden surveillance pole
+const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 1.6, 12), fenceMat);
+pole.position.y = 0.8;
+pole.castShadow = true;
+hardwareRoot.add(pole);
+
+// Base bracket
+const baseBracket = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.24, 0.28, 0.14, 16),
+  new THREE.MeshStandardMaterial({ color: 0x3d4349, roughness: 0.6 })
+);
+baseBracket.position.y = 1.6;
+hardwareRoot.add(baseBracket);
+
+// 1. PIR Motion Sensor (Fresnel dome lens mounted on pole facing -Z into field)
+const pirSensorRoot = new THREE.Group();
+pirSensorRoot.position.set(0, 1.35, -0.14);
+
+const pirHousing = new THREE.Mesh(
+  new THREE.BoxGeometry(0.12, 0.16, 0.08),
+  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 })
+);
+pirSensorRoot.add(pirHousing);
+
+const pirDome = new THREE.Mesh(
+  new THREE.SphereGeometry(0.05, 12, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.2, transparent: true, opacity: 0.9 })
+);
+pirDome.rotation.x = -Math.PI / 2;
+pirDome.position.z = -0.04;
+pirSensorRoot.add(pirDome);
+
+// PIR Indicator LED
+const pirLedMat = new THREE.MeshBasicMaterial({ color: 0x4e8a56 });
+const pirLed = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), pirLedMat);
+pirLed.position.set(0, 0.055, -0.045);
+pirSensorRoot.add(pirLed);
+hardwareRoot.add(pirSensorRoot);
+
+// Visible PIR detection cone in 3D (Placed on Layer 1 so only external 3D view sees it, not sensorCam!)
+const pirConeGeo = new THREE.ConeGeometry(5.2, 8.0, 20, 1, true, -Math.PI / 3, (2 * Math.PI) / 3);
+pirConeGeo.translate(0, -4.0, 0); // apex at (0, 0, 0)
+pirConeGeo.rotateX(Math.PI / 2);  // point forward along -Z into field
+const pirConeMat = new THREE.MeshBasicMaterial({
+  color: 0xe5a93b,
+  wireframe: true,
+  transparent: true,
+  opacity: 0.18,
+});
+const pirConeMesh = new THREE.Mesh(pirConeGeo, pirConeMat);
+pirConeMesh.position.set(0, 1.35, -0.18);
+pirConeMesh.layers.set(1); // Layer 1: external camera only!
+hardwareRoot.add(pirConeMesh);
+
+// Ground highlight for PIR zone on the grass (Layer 1: external view only)
+const pirGroundGeo = new THREE.RingGeometry(0.5, 8.0, 24, 1, Math.PI / 6, (2 * Math.PI) / 3);
+const pirGroundMat = new THREE.MeshBasicMaterial({
+  color: 0xe5a93b,
+  transparent: true,
+  opacity: 0.08,
+  side: THREE.DoubleSide,
+});
+const pirGroundMesh = new THREE.Mesh(pirGroundGeo, pirGroundMat);
+pirGroundMesh.rotation.x = -Math.PI / 2;
+pirGroundMesh.position.set(0, 0.02, 0);
+pirGroundMesh.layers.set(1); // Layer 1
+scene.add(pirGroundMesh);
+
+// 2. Pan Turret (Yaw Axis: -90° to +90°)
+const panTurret = new THREE.Group();
+panTurret.position.set(0, 1.7, 0);
+hardwareRoot.add(panTurret);
+
+// Pan servo body
+const panServo = new THREE.Mesh(
+  new THREE.BoxGeometry(0.28, 0.18, 0.28),
+  new THREE.MeshStandardMaterial({ color: 0x3d6e8a, roughness: 0.5 })
+);
+panServo.position.y = 0.09;
+panTurret.add(panServo);
+
+// Tilt U-Arms
+const uArmL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.38, 0.16), new THREE.MeshStandardMaterial({ color: 0x484f56 }));
+uArmL.position.set(-0.16, 0.28, 0);
+panTurret.add(uArmL);
+const uArmR = uArmL.clone();
+uArmR.position.x = 0.16;
+panTurret.add(uArmR);
+
+// 3. Tilt Head (Pitch Axis: -30° to +30°)
+const tiltHead = new THREE.Group();
+tiltHead.position.set(0, 0.36, 0);
+panTurret.add(tiltHead);
+
+// ESP32-CAM PCB & Enclosure
+const pcb = new THREE.Mesh(
+  new THREE.BoxGeometry(0.24, 0.18, 0.08),
+  new THREE.MeshStandardMaterial({ color: 0x2e663a, roughness: 0.4 })
+);
+tiltHead.add(pcb);
+
+// OV2640 Camera Lens Barrel (Facing -Z)
+const lens = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.035, 0.04, 0.06, 16),
+  new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 })
+);
+lens.rotation.x = Math.PI / 2;
+lens.position.set(0, 0, -0.05);
+tiltHead.add(lens);
+
+// Mount Pinhole Sensor Camera (Cleanly placed in front of lens facing -Z)
+tiltHead.add(sensorCam);
+sensorCam.position.set(0, 0, -0.22); // cleanly forward, unobstructed!
+sensorCam.rotation.set(0, 0, 0);
+
+// 4. Directional Spotlight — COAXIAL WITH CAMERA (Facing SAME direction -Z)
+const spotCylinder = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.045, 0.05, 0.14, 16),
+  new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.3 })
+);
+spotCylinder.rotation.x = Math.PI / 2;
+spotCylinder.position.set(0, 0.14, -0.04);
+tiltHead.add(spotCylinder);
+
+// Directional Spotlight pointing along -Z with camera (realistic intensity 2.2, NOT 18.0!)
+const dirSpotlight = new THREE.SpotLight(0xfffae0, 0, 26, Math.PI / 4.5, 0.4, 1.0);
+dirSpotlight.position.set(0, 0.14, -0.11);
+dirSpotlight.target.position.set(0, 0.14, -10.0);
+dirSpotlight.castShadow = true;
+tiltHead.add(dirSpotlight);
+tiltHead.add(dirSpotlight.target);
+
+// 5. Sound Speaker / Acoustic Horn (Mounted on side of Tilt Head facing -Z towards animal)
+const hornCone = new THREE.Mesh(
+  new THREE.ConeGeometry(0.065, 0.12, 16, 1, true),
+  new THREE.MeshStandardMaterial({ color: 0xb5542a, roughness: 0.6, side: THREE.DoubleSide })
+);
+hornCone.rotation.x = Math.PI / 2;
+hornCone.position.set(0.18, 0, -0.04);
+tiltHead.add(hornCone);
+
+scene.add(hardwareRoot);
+hardwareRoot.traverse(obj => {
+  if (obj.isMesh && obj !== pirConeMesh) {
+    obj.layers.set(2);
+  }
+});
+dirSpotlight.layers.enable(0);
+dirSpotlight.layers.enable(2);
+
+// ── 17 Wildlife Classes High-Detail 3D Target Generator ──────────────────────
+const animalRoot = new THREE.Group();
+animalRoot.position.copy(Sim.animalPos);
+scene.add(animalRoot);
+
+function generateWildlifeTexture(species) {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 384;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 512, 384);
+
+  ctx.save();
+  ctx.translate(256, 192);
+
+  if (species === 'Leopard') {
+    ctx.fillStyle = '#c58428';
+    ctx.beginPath(); ctx.ellipse(0, 20, 140, 75, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-130, -25, 45, 40, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#221105';
+    for (let x = -100; x <= 100; x += 28) {
+      for (let y = -10; y <= 50; y += 22) {
+        ctx.beginPath(); ctx.arc(x + (y % 12), y, 6.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  } else if (species === 'AmurTiger') {
+    ctx.fillStyle = '#d96c14';
+    ctx.beginPath(); ctx.ellipse(0, 20, 160, 85, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-150, -30, 52, 48, -0.1, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#1a0e05'; ctx.lineWidth = 10;
+    for (let x = -110; x <= 120; x += 30) {
+      ctx.beginPath(); ctx.moveTo(x, -35); ctx.lineTo(x + 12, 65); ctx.stroke();
+    }
+  } else if (species === 'WildBoar') {
+    ctx.fillStyle = '#312824';
+    ctx.beginPath(); ctx.ellipse(0, 15, 135, 80, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-130, 10, 38, 26, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#423732'; ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(-125, 12); ctx.lineTo(-142, -2); ctx.lineTo(-120, 22); ctx.fill();
+  } else if (species === 'BlackBear') {
+    ctx.fillStyle = '#1c1b1a';
+    ctx.beginPath(); ctx.ellipse(0, 25, 150, 95, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-135, -20, 55, 50, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(-155, -60, 18, 0, Math.PI * 2); ctx.arc(-115, -65, 18, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.fillStyle = '#8f5a2e';
+    ctx.beginPath(); ctx.ellipse(0, 20, 125, 65, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-115, -35, 35, 30, -0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#5c3919'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(-120, -60); ctx.lineTo(-140, -105);
+    ctx.moveTo(-115, -60); ctx.lineTo(-100, -105); ctx.stroke();
+  }
+
+  // Realistic Eye
+  ctx.fillStyle = '#0a0a0a';
+  ctx.beginPath(); ctx.arc(-135, -28, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fffdf0';
+  ctx.beginPath(); ctx.arc(-136, -29, 1.8, 0, Math.PI * 2); ctx.fill();
+
+  ctx.restore();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+let animalMesh = null;
+function updateAnimalBillboard() {
+  if (animalMesh) animalRoot.remove(animalMesh);
+  const tex = generateWildlifeTexture(Sim.species);
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex,
+    transparent: true,
+    alphaTest: 0.1,
+    side: THREE.DoubleSide,
+    roughness: 0.8,
+  });
+  animalMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.8), mat);
+  animalMesh.position.y = 0.9;
+  animalMesh.castShadow = true;
+  animalRoot.add(animalMesh);
+}
+updateAnimalBillboard();
+
+// ── Check Backend Health ─────────────────────────────────────────────────────
+async function checkBackendHealth() {
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const pill = document.getElementById('backend-status-pill');
+  try {
+    const res = await fetch(`${url}/health`, { method: 'GET', signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      const data = await res.json();
+      Sim.backendOnline = true;
+      pill.textContent = `Backend: Connected (${data.engine})`;
+      pill.className = 'pill active';
+      try {
+        const sRes = await fetch(`${url}/state/cam-001`);
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData) {
+            Object.assign(Sim.cameraState, sData);
+            updateCameraStateUI();
+          }
+        }
+      } catch (_) {}
+      return;
+    }
+  } catch (e) {
+    // Backend offline
+  }
+  Sim.backendOnline = false;
+  pill.textContent = 'Backend: Standalone (Local Sim)';
+  pill.className = 'pill';
+}
+checkBackendHealth();
+
+// ── Deterministic Trajectory: 10s Timeline ───────────────────────────────────
+function computeAnimalPositionAtTime(t) {
+  // t = 0.0s to 1.0s: Outside PIR zone (d > 8.0m)
+  // at t = 1.1s: Crosses PIR boundary (d = 7.7m <= 8.0m) -> TRIGGER!
+  // t = 1.1s to 5.0s: Stalks into crop field towards center
+  // t >= 5.0s: Flees away towards perimeter
+  if (t < 1.0) {
+    const f = t / 1.0;
+    return { x: -4.0 + f * 1.0, z: -10.0 + f * 1.8 }; // t=0: (-4.0, -10.0), dist=10.7m. t=1.0: (-3.0, -8.2), dist=8.7m
+  } else if (t <= 1.1) {
+    const f = (t - 1.0) / 0.1;
+    return { x: -3.0 + f * 0.4, z: -8.2 + f * 0.9 }; // t=1.1: (-2.6, -7.3), dist=7.75m <= 8m! TRIGGER!
+  } else if (t < 5.0) {
+    const f = (t - 1.1) / 3.9;
+    return { x: -2.6 + f * 4.2, z: -7.3 + f * 2.5 }; // stalks to (+1.6, -4.8)
+  } else {
+    // Flees from deterrent
+    const f = (t - 5.0) / 5.0;
+    return { x: 1.6 + f * 6.5, z: -4.8 - f * 6.0 }; // flees back to (+8.1, -10.8)
+  }
+}
+
+// ── Master Simulation Tick (Discrete Step Execution) ─────────────────────────
+async function executeSimulationStep(targetTime, dt) {
+  Sim.currentTime = Math.max(0, Math.min(Sim.maxTime, targetTime));
+
+  // 1. Compute animal position from timeline
+  const pos = computeAnimalPositionAtTime(Sim.currentTime);
+  Sim.animalPos.x = pos.x;
+  Sim.animalPos.z = pos.z;
+  animalRoot.position.copy(Sim.animalPos);
+
+  if (animalMesh) {
+    animalMesh.scale.x = Sim.currentTime < 5.0 ? -1 : 1;
+  }
+
+  // 2. Evaluate PIR Motion Sensor (at post x=0, z=0, looking -Z)
+  const dist = Math.hypot(Sim.animalPos.x, Sim.animalPos.z);
+  const angleDeg = Math.abs(THREE.MathUtils.radToDeg(Math.atan2(Sim.animalPos.x, -Sim.animalPos.z)));
+  const inPIR = dist <= 8.0 && angleDeg <= 50.0 && Sim.animalPos.z < -1.5;
+  Sim.pirDetected = inPIR;
+
+  // Real Hardware Lifecycle:
+  if (inPIR) {
+    Sim.systemActive = true;
+    Sim.activeHoldTimer = 6.0;
+    pirLedMat.color.setHex(0xc94a44);
+    document.getElementById('pir-hud-badge').className = 'pir-badge triggered';
+    document.getElementById('pir-hud-badge').innerHTML = `<span>🚨</span> Motion Triggered (${dist.toFixed(1)}m)`;
+    document.getElementById('pkt-pir').textContent = `TRIGGERED (${dist.toFixed(1)}m)`;
+    document.getElementById('pkt-pir').className = 'mv red';
+  } else {
+    pirLedMat.color.setHex(0x4e8a56);
+    document.getElementById('pir-hud-badge').className = 'pir-badge';
+    document.getElementById('pir-hud-badge').innerHTML = `<span>🌱</span> PIR Standby (${dist.toFixed(1)}m)`;
+    document.getElementById('pkt-pir').textContent = `CLEAR (${dist.toFixed(1)}m)`;
+    document.getElementById('pkt-pir').className = 'mv green';
+
+    if (Sim.systemActive) {
+      Sim.activeHoldTimer -= dt;
+      if (Sim.activeHoldTimer <= 0) Sim.systemActive = false;
+    }
+  }
+
+  // 3. Update Directional Spotlight & Camera Power
+  // Clean natural spotlight intensity: 2.2 (when active), 0 (when sleep)
+  if (Sim.systemActive) {
+    Sim.directionalLightOn = true;
+    Sim.cameraActive = true;
+    dirSpotlight.intensity = 2.2;
+
+    document.getElementById('pkt-status').textContent = 'TRANSMITTING (15 FPS)';
+    document.getElementById('pkt-status').className = 'mv green';
+    document.getElementById('cam-optical-state').textContent = 'ACTIVE / CAPTURING';
+    document.getElementById('cam-optical-state').style.color = 'var(--green)';
+    document.getElementById('cam-fps-pill').textContent = '15 FPS';
+    document.getElementById('cam-fps-pill').className = 'pill active';
+  } else {
+    Sim.directionalLightOn = false;
+    Sim.cameraActive = false;
+    dirSpotlight.intensity = 0.0;
+
+    document.getElementById('pkt-status').textContent = 'SLEEP (NO PACKET)';
+    document.getElementById('pkt-status').className = 'mv';
+    document.getElementById('cam-optical-state').textContent = 'SLEEP (STANDBY)';
+    document.getElementById('cam-optical-state').style.color = 'var(--text-muted)';
+    document.getElementById('cam-fps-pill').textContent = 'IDLE';
+    document.getElementById('cam-fps-pill').className = 'pill';
+  }
+
+  // 4. Update Physical Servos: Smooth Slew towards Commanded Target
+  const effectiveDt = Math.max(0.05, Math.min(0.2, dt));
+  const maxStep = Sim.slewRate * effectiveDt;
+
+  const panDiff = Sim.targetPan - Sim.currentPan;
+  if (Math.abs(panDiff) <= maxStep) Sim.currentPan = Sim.targetPan;
+  else Sim.currentPan += Math.sign(panDiff) * maxStep;
+
+  const tiltDiff = Sim.targetTilt - Sim.currentTilt;
+  if (Math.abs(tiltDiff) <= maxStep) Sim.currentTilt = Sim.targetTilt;
+  else Sim.currentTilt += Math.sign(tiltDiff) * maxStep;
+
+  // Apply to physical 3D gimbal hierarchy (negative X tilt points downward towards ground)
+  panTurret.rotation.y = THREE.MathUtils.degToRad(-Sim.currentPan);
+  tiltHead.rotation.x = THREE.MathUtils.degToRad(-Sim.currentTilt);
+
+  // Update Outgoing Packet telemetry
+  document.getElementById('pkt-pan').textContent = Sim.currentPan.toFixed(2) + '°';
+  document.getElementById('pkt-tilt').textContent = Sim.currentTilt.toFixed(2) + '°';
+
+  // Kinematics Slew Lag
+  const remainingLag = Math.hypot(Sim.targetPan - Sim.currentPan, Sim.targetTilt - Sim.currentTilt);
+  document.getElementById('act-pan').textContent = Sim.currentPan.toFixed(2) + '°';
+  document.getElementById('act-tilt').textContent = Sim.currentTilt.toFixed(2) + '°';
+  document.getElementById('act-lag').textContent = remainingLag.toFixed(2) + '°';
+
+  const isMoving = remainingLag > 0.2;
+  document.getElementById('act-status').textContent = isMoving ? 'SLEWING TOWARDS TARGET' : 'AT TARGET (HOLDING)';
+  document.getElementById('act-status').className = 'mv ' + (isMoving ? 'orange' : 'green');
+
+  // 5. Render Sensor Frame directly using Hardware WebGL Renderer
+  renderSensorFrame();
+
+  // 6. If camera active, send EXACTLY 1 frame to backend for this step
+  if (Sim.cameraActive && !Sim.isInferring) {
+    Sim.frameIndex++;
+    document.getElementById('disp-frame').textContent = Sim.frameIndex;
+    await processFrameStep();
+  } else if (!Sim.cameraActive) {
+    updateCameraStateUI();
+  }
+
+  // Update timeline scrubber UI & time text
+  document.getElementById('disp-time').textContent = Sim.currentTime.toFixed(2) + 's';
+  document.getElementById('time-scrubber').value = Sim.currentTime.toFixed(1);
+  document.getElementById('sys-mode-pill').textContent = Sim.cameraActive
+    ? `Active · t=${Sim.currentTime.toFixed(1)}s`
+    : `Standby · t=${Sim.currentTime.toFixed(1)}s`;
+  document.getElementById('sys-mode-pill').className = Sim.cameraActive ? 'pill active' : 'pill';
+}
+
+// ── Decoupled Polling Engines (Push / Poll Split) ───────────────────────────
+let servoPollTimer = null;
+let actionPollTimer = null;
+
+async function pollServoOnce() {
+  if (!Sim.backendOnline || !Sim.cameraActive) return;
+  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
+  if (mode !== 'push_poll') return;
+
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  try {
+    const res = await fetch(`${url}/servo/cam-001`, { signal: AbortSignal.timeout(400) });
+    if (res.ok) {
+      const data = await res.json();
+      applyBackendResult(data);
+    }
+  } catch (_) {}
+}
+
+async function pollActionOnce() {
+  if (!Sim.backendOnline || !Sim.cameraActive) return;
+  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
+  if (mode !== 'push_poll') return;
+
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  try {
+    const res = await fetch(`${url}/action/cam-001`, { signal: AbortSignal.timeout(600) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.action && data.action !== 'none' && data.action !== 'CONTINUE_SWEEP') {
+        if (data.action === 'BARK_SOUND') {
+          playSoundFromBackend('BARK_SOUND');
+          triggerStrobeFlash(0.3);
+        } else if (data.action === 'FLASH_LIGHT') {
+          triggerStrobeFlash(1.0);
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+// Start polling engines: 80ms fast servo tracking, 400ms slow action checking
+if (!servoPollTimer) servoPollTimer = setInterval(pollServoOnce, 80);
+if (!actionPollTimer) actionPollTimer = setInterval(pollActionOnce, 400);
+
+// ── Frame Processing & Backend Sync ─────────────────────────────────────────
+async function processFrameStep() {
+  Sim.isInferring = true;
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const apiKey = document.getElementById('cfg-key').value;
+  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
+  const capturePan = Sim.currentPan;
+  const captureTilt = Sim.currentTilt;
+
+  let success = false;
+  if (Sim.backendOnline) {
+    try {
+      const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.90));
+      const fd = new FormData();
+      fd.append('camera_id', 'cam-001');
+      fd.append('pan_angle', capturePan.toString());
+      fd.append('tilt_angle', captureTilt.toString());
+      fd.append('image_width', '640');
+      fd.append('image_height', '480');
+      fd.append('seq', Sim.frameIndex.toString());
+      fd.append('image', blob, 'frame.jpg');
+
+      if (mode === 'push_poll') {
+        // Fire-and-forget push: returns 202 Accepted in <5ms without blocking
+        const res = await fetch(`${url}/frame/cam-001`, {
+          method: 'POST',
+          headers: { 'X-Api-Key': apiKey },
+          body: fd,
+          signal: AbortSignal.timeout(800),
+        });
+        if (res.ok) {
+          const acc = await res.json();
+          document.getElementById('pkt-status').textContent = `PUSHED (#${acc.seq}, drop=${acc.dropped})`;
+          document.getElementById('pkt-status').className = 'mv green';
+          success = true;
+        }
+      } else {
+        // Synchronous /infer mode: direct request-response
+        const res = await fetch(`${url}/infer`, {
+          method: 'POST',
+          headers: { 'X-Api-Key': apiKey },
+          body: fd,
+          signal: AbortSignal.timeout(1800),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          applyBackendResult(data);
+          success = true;
+        }
+      }
+    } catch (err) {
+      Sim.backendOnline = false;
+      document.getElementById('backend-status-pill').textContent = 'Backend: Standalone (Local Sim)';
+      document.getElementById('backend-status-pill').className = 'pill';
+    }
+  }
+
+  // If backend was offline, run exact local servo_math.py & state.py logic
+  if (!success && mode === 'sync') {
+    runLocalBackendMath(capturePan, captureTilt);
+  }
+
+  Sim.isInferring = false;
+}
+
+// ── Exact Local Emulation of servo_math.py & state.py ────────────────────────
+function runLocalBackendMath(capturePan, captureTilt) {
+  // Project animal 3D position into sensor camera pixel coordinates
+  const projected = Sim.animalPos.clone().project(sensorCam);
+
+  // Check if target is in front of camera and inside the 640x480 frame
+  const inFrustum = projected.z < 1.0 && projected.x >= -1.0 && projected.x <= 1.0 && projected.y >= -1.0 && projected.y <= 1.0;
+
+  if (inFrustum) {
+    const cx = ((projected.x + 1.0) / 2.0) * 640;
+    const cy = ((-projected.y + 1.0) / 2.0) * 480;
+
+    const boxW = Math.max(70, Math.min(220, (1.8 / -Sim.animalPos.z) * 640));
+    const boxH = boxW * 0.75;
+    const bbox = [cx - boxW / 2, cy - boxH / 2, cx + boxW / 2, cy + boxH / 2];
+
+    const det = {
+      class_id: 6,
+      class_name: Sim.species,
+      confidence: 0.92,
+      bbox: bbox,
+      bbox_center: [cx, cy],
+    };
+
+    // ── 3-Layer Servo Math ──
+    const imgCx = 320.0, imgCy = 240.0;
+    const rawErrX = cx - imgCx;
+    const rawErrY = cy - imgCy;
+    const errHypot = Math.hypot(rawErrX, rawErrY);
+
+    let skip = false;
+    let targetPan = Sim.cameraState.last_pan_absolute;
+    let targetTilt = Sim.cameraState.last_tilt_absolute;
+
+    // Layer 1: Deadzone (DEADZONE_PX = 20.0)
+    if (errHypot <= 20.0) {
+      skip = true;
+    } else {
+      // Layer 2: Velocity Compensation
+      let predCx = cx, predCy = cy;
+      if (Sim.cameraState.prev_bbox_center) {
+        const velX = (cx - Sim.cameraState.prev_bbox_center[0]) / 66.0;
+        const velY = (cy - Sim.cameraState.prev_bbox_center[1]) / 66.0;
+        predCx += Math.max(-150, Math.min(150, velX * 220.0));
+        predCy += Math.max(-150, Math.min(150, velY * 220.0));
+      }
+
+      // Layer 3: Absolute Target (PAN_GAIN = 0.05, TILT_GAIN = 0.05)
+      const errX = predCx - imgCx;
+      const errY = predCy - imgCy;
+      const panCorr = Math.max(-15.0, Math.min(15.0, errX * 0.05));
+      const tiltCorr = Math.max(-10.0, Math.min(10.0, errY * 0.05));
+
+      const rawPan = Math.max(-90.0, Math.min(90.0, Sim.cameraState.last_pan_absolute + panCorr));
+      const rawTilt = Math.max(-30.0, Math.min(30.0, Sim.cameraState.last_tilt_absolute + tiltCorr));
+
+      // Layer 4: Angular threshold (+/- 1.5° deadband)
+      targetPan = Math.abs(rawPan - Sim.cameraState.last_pan_absolute) < 1.5
+        ? Sim.cameraState.last_pan_absolute
+        : rawPan;
+      targetTilt = Math.abs(rawTilt - Sim.cameraState.last_tilt_absolute) < 1.5
+        ? Sim.cameraState.last_tilt_absolute
+        : rawTilt;
+
+      if (targetPan === Sim.cameraState.last_pan_absolute && targetTilt === Sim.cameraState.last_tilt_absolute) {
+        skip = true;
+      }
+    }
+
+    // JEV Deterrent Decision (at t >= 4.5s trigger BARK_SOUND)
+    let action = 'none';
+    if (Sim.currentTime >= 4.5 && Sim.cameraState.action_frames_remaining === 0) {
+      action = 'BARK_SOUND';
+    }
+
+    // Update in-memory CameraState (state.py: update_detected)
+    const cs = Sim.cameraState;
+    cs.phase = 'tracking';
+    cs.frames_without_detection = 0;
+    if (action !== 'none') {
+      cs.active_action = action;
+      cs.action_frames_remaining = 10;
+    } else if (cs.action_frames_remaining > 0) {
+      cs.action_frames_remaining--;
+    } else {
+      cs.active_action = 'none';
+    }
+    cs.prev_bbox_center = [cx, cy];
+    cs.prev_frame_ts = Sim.currentTime;
+    cs.last_pan_absolute = targetPan;
+    cs.last_tilt_absolute = targetTilt;
+
+    Sim.targetPan = targetPan;
+    Sim.targetTilt = targetTilt;
+
+    applyBackendResult({
+      phase: 'tracking',
+      action: action,
+      movement: { pan_absolute: targetPan, tilt_absolute: targetTilt, skip: skip },
+      detection: det,
+      inference_ms: 88.5,
+    });
+
+  } else {
+    // No detection: update_not_detected
+    const cs = Sim.cameraState;
+    cs.frames_without_detection++;
+    cs.prev_bbox_center = null;
+
+    if (cs.phase === 'tracking' && cs.frames_without_detection < 5) {
+      // In hysteresis window: animal temporarily not detected, hold position!
+      applyBackendResult({
+        phase: 'tracking',
+        action: cs.active_action,
+        movement: { pan_absolute: cs.last_pan_absolute, tilt_absolute: cs.last_tilt_absolute, skip: true },
+        detection: null,
+        camera_state: {
+          phase: 'tracking',
+          frames_without_detection: cs.frames_without_detection,
+          active_action: cs.active_action,
+          action_frames_remaining: cs.action_frames_remaining,
+          sweep_step: cs.sweep_step,
+          prev_bbox_center: null,
+          last_pan_absolute: cs.last_pan_absolute,
+          last_tilt_absolute: cs.last_tilt_absolute,
+        },
+        inference_ms: 72.0,
+      });
+    } else {
+      cs.phase = 'sweeping';
+      const sweepSeq = [[0,0],[30,0],[60,0],[90,0],[60,10],[30,10],[0,10],[-30,10],[-60,10],[-90,10],[-60,0],[-30,0]];
+      cs.sweep_step = (cs.sweep_step + 1) % sweepSeq.length;
+      const sweepTarget = sweepSeq[cs.sweep_step];
+
+      Sim.targetPan = sweepTarget[0];
+      Sim.targetTilt = sweepTarget[1];
+
+      applyBackendResult({
+        phase: 'sweeping',
+        action: 'CONTINUE_SWEEP',
+        movement: { pan_absolute: sweepTarget[0], tilt_absolute: sweepTarget[1], skip: false },
+        detection: null,
+        camera_state: {
+          phase: 'sweeping',
+          frames_without_detection: cs.frames_without_detection,
+          active_action: 'none',
+          action_frames_remaining: 0,
+          sweep_step: cs.sweep_step,
+          prev_bbox_center: null,
+          last_pan_absolute: sweepTarget[0],
+          last_tilt_absolute: sweepTarget[1],
+        },
+        inference_ms: 72.0,
+      });
+    }
+  }
+}
+
+// ── Apply Backend Result to Inspector & Servos ──────────────────────────────
+function applyBackendResult(data) {
+  Sim.lastDetection = data.detection;
+
+  // Sync In-Memory CameraState from Backend Response
+  if (data.camera_state) {
+    Sim.cameraState = {
+      phase: data.camera_state.phase || data.phase || 'sweeping',
+      frames_without_detection: data.camera_state.frames_without_detection ?? 0,
+      active_action: data.camera_state.active_action || data.action || 'none',
+      action_frames_remaining: data.camera_state.action_frames_remaining ?? 0,
+      sweep_step: data.camera_state.sweep_step ?? 0,
+      prev_bbox_center: data.camera_state.prev_bbox_center || (data.detection ? data.detection.bbox_center : null),
+      prev_frame_ts: Sim.currentTime,
+      last_pan_absolute: data.camera_state.last_pan_absolute ?? (data.movement ? data.movement.pan_absolute : Sim.currentPan),
+      last_tilt_absolute: data.camera_state.last_tilt_absolute ?? (data.movement ? data.movement.tilt_absolute : Sim.currentTilt),
+    };
+  } else {
+    Sim.cameraState.phase = data.phase || (data.detection ? 'tracking' : 'sweeping');
+    Sim.cameraState.active_action = data.action || 'none';
+    if (data.movement) {
+      Sim.cameraState.last_pan_absolute = data.movement.pan_absolute;
+      Sim.cameraState.last_tilt_absolute = data.movement.tilt_absolute;
+    }
+    if (data.detection) {
+      Sim.cameraState.frames_without_detection = 0;
+      Sim.cameraState.prev_bbox_center = data.detection.bbox_center;
+    } else {
+      Sim.cameraState.frames_without_detection++;
+      Sim.cameraState.prev_bbox_center = null;
+    }
+    Sim.cameraState.prev_frame_ts = Sim.currentTime;
+  }
+
+  if (data.detection) {
+    document.getElementById('det-cls').textContent = data.detection.class_name;
+    document.getElementById('det-conf').textContent = (data.detection.confidence * 100).toFixed(1) + '%';
+    const [bcx, bcy] = data.detection.bbox_center;
+    const errX = Math.round(bcx - 320);
+    const errY = Math.round(bcy - 240);
+    const errHypot = Math.round(Math.hypot(errX, errY));
+
+    document.getElementById('cam-target-error').textContent = `ΔX: ${errX}px, ΔY: ${errY}px`;
+    document.getElementById('cam-optical-state').textContent = `TRACKING ${data.detection.class_name.toUpperCase()}`;
+    document.getElementById('cam-optical-state').style.color = 'var(--primary)';
+
+    const isDeadzone = errHypot <= 20;
+    const isSkipped = data.movement.skip;
+    if (isSkipped) {
+      document.getElementById('math-l1').textContent = isDeadzone
+        ? `Inside Center Deadzone (${errHypot}px <= 20px)`
+        : `Angular Deadband (Δ < 1.5° · Hold)`;
+      document.getElementById('math-l1').className = 'mv green';
+      document.getElementById('math-l3').textContent = `Hold: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
+    } else {
+      document.getElementById('math-l1').textContent = `Outside Deadzone (${errHypot}px > 20px)`;
+      document.getElementById('math-l1').className = 'mv orange';
+      document.getElementById('math-l3').textContent = `Pan: ${data.movement.pan_absolute.toFixed(1)}°, Tilt: ${data.movement.tilt_absolute.toFixed(1)}°`;
+    }
+    document.getElementById('math-l2').textContent = `Err: ${errX}px, ${errY}px`;
+
+    if (!data.movement.skip) {
+      Sim.targetPan = data.movement.pan_absolute;
+      Sim.targetTilt = data.movement.tilt_absolute;
+    }
+  } else {
+    document.getElementById('det-cls').textContent = 'None';
+    document.getElementById('det-conf').textContent = '—';
+    if (data.phase === 'tracking') {
+      const fnd = Sim.cameraState.frames_without_detection || 1;
+      document.getElementById('cam-optical-state').textContent = `TRACKING (HOLDING · ${fnd}/5 NO-DET)`;
+      document.getElementById('cam-optical-state').style.color = 'var(--primary)';
+      document.getElementById('math-l1').textContent = `Holding Target (${fnd}/5 dropped)`;
+      document.getElementById('math-l1').className = 'mv green';
+      document.getElementById('math-l2').textContent = 'Hysteresis / Re-acquiring';
+      document.getElementById('math-l3').textContent = `Hold: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
+      if (!data.movement.skip) {
+        Sim.targetPan = data.movement.pan_absolute;
+        Sim.targetTilt = data.movement.tilt_absolute;
+      }
+    } else {
+      document.getElementById('cam-optical-state').textContent = 'SWEEPING PERIMETER';
+      document.getElementById('cam-optical-state').style.color = 'var(--blue)';
+      document.getElementById('math-l1').textContent = 'No Detection → Sweep';
+      document.getElementById('math-l1').className = 'mv';
+      document.getElementById('math-l2').textContent = '—';
+      document.getElementById('math-l3').textContent = `Sweep: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
+      Sim.targetPan = data.movement.pan_absolute;
+      Sim.targetTilt = data.movement.tilt_absolute;
+    }
+  }
+
+  // Deterrent Action
+  if (data.action === 'BARK_SOUND') {
+    playSoundFromBackend('BARK_SOUND');
+    triggerStrobeFlash(0.3);
+  } else if (data.action === 'FLASH_LIGHT') {
+    triggerStrobeFlash(1.0);
+  }
+
+  updateCameraStateUI();
+}
+
+// ── Update Exact in-memory CameraState Inspector ────────────────────────────
+function updateCameraStateUI() {
+  const cs = Sim.cameraState;
+  document.getElementById('cs-phase').textContent = `Phase.${cs.phase}`;
+  document.getElementById('cs-phase').className = 'mv ' + (cs.phase === 'tracking' ? 'green' : 'blue');
+  document.getElementById('cs-fnd').textContent = cs.frames_without_detection;
+  document.getElementById('cs-action').textContent = `Action.${cs.active_action}`;
+  document.getElementById('cs-action').className = 'mv ' + (cs.active_action !== 'none' ? 'orange' : '');
+  document.getElementById('cs-afr').textContent = cs.action_frames_remaining;
+  document.getElementById('cs-sweep').textContent = cs.sweep_step;
+  document.getElementById('cs-pbc').textContent = cs.prev_bbox_center
+    ? `[${Math.round(cs.prev_bbox_center[0])}, ${Math.round(cs.prev_bbox_center[1])}]`
+    : 'None';
+  document.getElementById('cs-pts').textContent = cs.prev_frame_ts.toFixed(3);
+  document.getElementById('cs-lpa').textContent = cs.last_pan_absolute.toFixed(2) + '°';
+  document.getElementById('cs-lta').textContent = cs.last_tilt_absolute.toFixed(2) + '°';
+
+  // Live JSON dump of in-memory dictionary
+  document.getElementById('cs-json-box').textContent = JSON.stringify({
+    phase: cs.phase,
+    frames_without_detection: cs.frames_without_detection,
+    active_action: cs.active_action,
+    action_frames_remaining: cs.action_frames_remaining,
+    sweep_step: cs.sweep_step,
+    prev_bbox_center: cs.prev_bbox_center,
+    prev_frame_ts: parseFloat(cs.prev_frame_ts.toFixed(3)),
+    last_pan_absolute: parseFloat(cs.last_pan_absolute.toFixed(2)),
+    last_tilt_absolute: parseFloat(cs.last_tilt_absolute.toFixed(2)),
+  }, null, 2);
+}
+
+// ── Direct Hardware WebGL Sensor Rendering & HUD ─────────────────────────────
+const hudCanvas = document.getElementById('cam-hud-canvas');
+const hudCtx = hudCanvas.getContext('2d');
+
+function renderSensorFrame() {
+  // Direct GPU Render to offscreen WebGLRenderTarget
+  renderer.setRenderTarget(sensorRenderTarget);
+  renderer.render(scene, sensorCam);
+  renderer.setRenderTarget(null);
+
+  // Read pixels back to 2D canvas (flip vertically for standard canvas layout)
+  renderer.readRenderTargetPixels(sensorRenderTarget, 0, 0, 640, 480, pixelBuffer);
+  for (let y = 0; y < 480; y++) {
+    const srcOffset = (479 - y) * rowBytes;
+    const dstOffset = y * rowBytes;
+    imgData.data.set(pixelBuffer.subarray(srcOffset, srcOffset + rowBytes), dstOffset);
+  }
+  camCtx.putImageData(imgData, 0, 0);
+
+  // Render HUD
+  hudCtx.clearRect(0, 0, 640, 480);
+  const cx = 320, cy = 240;
+
+  if (!Sim.cameraActive) {
+    // Sleeping Camera Overlay
+    hudCtx.save();
+    hudCtx.fillStyle = 'rgba(15, 20, 15, 0.72)';
+    hudCtx.fillRect(0, 0, 640, 480);
+    hudCtx.fillStyle = '#ffffff';
+    hudCtx.font = 'bold 15px system-ui, sans-serif';
+    hudCtx.textAlign = 'center';
+    hudCtx.fillText('💤 ESP32-CAM SLEEP MODE', cx, cy - 10);
+    hudCtx.fillStyle = 'rgba(255,255,255,0.7)';
+    hudCtx.font = '12px system-ui, sans-serif';
+    hudCtx.fillText('Standby: Awaiting PIR Wake Signal (t ≥ 1.1s)', cx, cy + 16);
+    hudCtx.restore();
+    return;
+  }
+
+  // Active Camera HUD:
+  // Center Deadzone Circle (radius = 20px)
+  hudCtx.save();
+  hudCtx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+  hudCtx.lineWidth = 1.5;
+  hudCtx.setLineDash([4, 4]);
+  hudCtx.beginPath();
+  hudCtx.arc(cx, cy, 20, 0, Math.PI * 2);
+  hudCtx.stroke();
+  hudCtx.setLineDash([]);
+
+  // Center Crosshair
+  hudCtx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+  hudCtx.lineWidth = 1;
+  hudCtx.beginPath();
+  hudCtx.moveTo(cx - 14, cy); hudCtx.lineTo(cx + 14, cy);
+  hudCtx.moveTo(cx, cy - 14); hudCtx.lineTo(cx, cy + 14);
+  hudCtx.stroke();
+  hudCtx.restore();
+
+  // Bounding Box from Detection
+  if (Sim.lastDetection) {
+    const det = Sim.lastDetection;
+    const [x1, y1, x2, y2] = det.bbox;
+    const w = x2 - x1, h = y2 - y1;
+    const [bcx, bcy] = det.bbox_center;
+
+    hudCtx.save();
+    hudCtx.strokeStyle = '#e07a3c';
+    hudCtx.lineWidth = 2.5;
+    hudCtx.strokeRect(x1, y1, w, h);
+
+    hudCtx.fillStyle = '#e07a3c';
+    hudCtx.fillRect(x1, Math.max(0, y1 - 20), 160, 20);
+    hudCtx.fillStyle = '#fff';
+    hudCtx.font = 'bold 11px system-ui, sans-serif';
+    hudCtx.fillText(`${det.class_name} ${(det.confidence * 100).toFixed(1)}%`, x1 + 6, Math.max(14, y1 - 6));
+
+    hudCtx.fillStyle = '#c94a44';
+    hudCtx.beginPath();
+    hudCtx.arc(bcx, bcy, 4.5, 0, Math.PI * 2);
+    hudCtx.fill();
+    hudCtx.restore();
+  }
+}
+
+function triggerStrobeFlash(intensity = 1.0) {
+  document.getElementById('screen-strobe').classList.add('active');
+  dirSpotlight.intensity = 3.5 * intensity;
+  setTimeout(() => {
+    document.getElementById('screen-strobe').classList.remove('active');
+    dirSpotlight.intensity = Sim.directionalLightOn ? 2.2 : 0.0;
+  }, 140);
+}
+
+// ── WebGL Main Render Loop ──────────────────────────────────────────────────
+let prevLoopTime = performance.now();
+function renderLoop() {
+  requestAnimationFrame(renderLoop);
+  const now = performance.now();
+  const dt = Math.min((now - prevLoopTime) / 1000, 0.1);
+  prevLoopTime = now;
+
+  // Auto-play advances slowly step by step
+  if (Sim.isPlaying) {
+    const nextTime = Sim.currentTime + dt * Sim.playbackSpeed;
+    executeSimulationStep(nextTime, dt * Sim.playbackSpeed);
+  }
+
+  controls.update();
+
+  // Render Sensor Viewport (OV2640 pinhole on Layer 0)
+  renderSensorFrame();
+
+  // Render Main 3D World Scene (External Camera sees Layers 0, 1, 2)
+  renderer.render(scene, externalCam);
+}
+requestAnimationFrame(renderLoop);
+
+// ── Timeline Control Actions ────────────────────────────────────────────────
+function togglePlay() {
+  Sim.isPlaying = !Sim.isPlaying;
+  document.getElementById('play-icon').textContent = Sim.isPlaying ? '⏸' : '▶';
+  document.getElementById('play-text').textContent = Sim.isPlaying ? 'Pause' : 'Auto Play (Slow)';
+  document.getElementById('btn-play').className = Sim.isPlaying ? 'btn btn-ghost' : 'btn btn-primary';
+}
+
+function stepTime(delta) {
+  Sim.isPlaying = false;
+  document.getElementById('play-icon').textContent = '▶';
+  document.getElementById('play-text').textContent = 'Auto Play (Slow)';
+  document.getElementById('btn-play').className = 'btn btn-primary';
+
+  const newT = Math.max(0, Math.min(Sim.maxTime, Sim.currentTime + delta));
+  executeSimulationStep(newT, Math.abs(delta));
+}
+
+function resetTime() {
+  Sim.isPlaying = false;
+  document.getElementById('play-icon').textContent = '▶';
+  document.getElementById('play-text').textContent = 'Auto Play (Slow)';
+  document.getElementById('btn-play').className = 'btn btn-primary';
+
+  Sim.currentTime = 0.0;
+  Sim.frameIndex = 0;
+  Sim.currentPan = 0;
+  Sim.currentTilt = 0;
+  Sim.targetPan = 0;
+  Sim.targetTilt = 0;
+  Sim.cameraState.phase = 'sweeping';
+  Sim.cameraState.frames_without_detection = 0;
+  Sim.cameraState.active_action = 'none';
+  Sim.cameraState.action_frames_remaining = 0;
+  Sim.cameraState.sweep_step = 0;
+  Sim.cameraState.prev_bbox_center = null;
+  Sim.cameraState.prev_frame_ts = 0.0;
+  Sim.cameraState.last_pan_absolute = 0.0;
+  Sim.cameraState.last_tilt_absolute = 0.0;
+
+  executeSimulationStep(0.0, 0.1);
+}
+
+function onScrubTime(val) {
+  Sim.isPlaying = false;
+  document.getElementById('play-icon').textContent = '▶';
+  document.getElementById('play-text').textContent = 'Auto Play (Slow)';
+  document.getElementById('btn-play').className = 'btn btn-primary';
+
+  const dt = Math.abs(val - Sim.currentTime);
+  executeSimulationStep(val, Math.max(0.05, dt));
+}
+
+function setSpeed(spd, btn) {
+  Sim.playbackSpeed = spd;
+  document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function onSpeciesChange(species) {
+  Sim.species = species;
+  updateAnimalBillboard();
+}
+
+// Window resize handler
+window.addEventListener('resize', () => {
+  const w = sceneBox.clientWidth;
+  const h = sceneBox.clientHeight;
+  if (w > 0 && h > 0) {
+    externalCam.aspect = w / h;
+    externalCam.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  }
+});
+
+// Initialize simulation at t=0
+executeSimulationStep(0.0, 0.1);
+</script>
+</body>
+</html>

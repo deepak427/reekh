@@ -1,0 +1,9 @@
+# Runtime dependencies — single-device wildlife inference service
+opencv-python-headless==5.0.0.93
+numpy==2.3.5
+fastapi==0.121.0
+uvicorn[standard]==0.30.6   # [standard] pulls in uvloop + httptools (ARM-compatible)
+httpx==0.28.1
+pydantic==2.12.4
+python-multipart==0.0.9
+python-dotenv==1.0.1

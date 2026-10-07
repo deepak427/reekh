@@ -1,0 +1,37 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+*.env
+!.env.example
+
+# ── Logs & metrics ────────────────────────────────────────────────────────────
+logs/*.jsonl
+logs/*.log
+logs/*.json
+!logs/.gitkeep
+
+# ── Model weights (large binaries — stored in S3 or Git LFS) ─────────────────
+models/*.onnx
+*.onnx
+*.pt
+*.pth
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
