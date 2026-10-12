@@ -62,7 +62,25 @@ def log_inference(
     })
 
 
-def log_action(*, camera_id: str, action: str, class_name: str, trigger: str) -> None:
+def log_frame_received(
+    *,
+    camera_id:    str,
+    seq:          int,
+    frame_bytes:  int,
+    pan_angle:    float,
+    tilt_angle:   float,
+    image_width:  int,
+    image_height: int,
+) -> None:
+    _write("frame_received", {
+        "camera_id":    camera_id,
+        "seq":          seq,
+        "frame_bytes":  frame_bytes,
+        "pan_angle":    pan_angle,
+        "tilt_angle":   tilt_angle,
+        "image_width":  image_width,
+        "image_height": image_height,
+    })
     """trigger: 'new' | 'debounce' | 'fallback'"""
     _write("action", {
         "camera_id":  camera_id,

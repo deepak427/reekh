@@ -29,6 +29,14 @@ _SVC_ROOT = _APP_DIR.parent
 if str(_SVC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SVC_ROOT))
 
+# stdout logging so every log line appears in AWS CloudWatch / console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+
 import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
@@ -321,6 +329,21 @@ async def push_frame(
         received_ts=time.time(),
     ))
 
+    svclog.log_frame_received(
+        camera_id=camera_id,
+        seq=seq,
+        frame_bytes=len(raw),
+        pan_angle=pan_angle,
+        tilt_angle=tilt_angle,
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+    logger.info(
+        "FRAME_RECEIVED camera=%s seq=%d bytes=%d dropped_total=%d",
+        camera_id, seq, len(raw), dropped,
+    )
+
     if dropped > 0 and dropped % 50 == 0:
         # Log every 50th drop to avoid flooding the log file
         svclog.log_frame_drop(camera_id=camera_id, dropped_count=dropped)
@@ -477,6 +500,31 @@ async def _process_frame(frame: FrameData) -> None:
         action=action.value,
         dropped_total=store.slot.dropped_count,
     )
+
+    if detection_out:
+        logger.info(
+            "INFERENCE_RESULT seq=%d detected=True class=%s confidence=%.4f "
+            "action=%s phase=%s inference_ms=%.1f total_ms=%.1f latency_ms=%.1f",
+            frame.seq,
+            detection_out.class_name,
+            detection_out.confidence,
+            action.value,
+            phase.value,
+            inference_ms,
+            total_ms,
+            latency_ms,
+        )
+    else:
+        logger.info(
+            "INFERENCE_RESULT seq=%d detected=False phase=%s action=%s "
+            "inference_ms=%.1f total_ms=%.1f latency_ms=%.1f",
+            frame.seq,
+            phase.value,
+            action.value,
+            inference_ms,
+            total_ms,
+            latency_ms,
+        )
 
     store.set_latest_servo(ServoPollResponse(
         camera_id=DEFAULT_CAMERA_ID,

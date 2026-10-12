@@ -438,7 +438,10 @@ pre.state-box {
         <div class="card-head">Inference Service</div>
         <div class="field">
           <label>Backend URL</label>
-          <input type="url" id="cfg-url" value="http://localhost:8000" />
+          <div style="display:flex; gap:6px;">
+            <input type="url" id="cfg-url" value="http://43.205.92.97:8000" style="flex:1;" />
+            <button type="button" onclick="checkBackendHealth()" style="padding:4px 10px; font-weight:700; cursor:pointer; background:var(--primary); color:#fff; border:none; border-radius:4px;">Connect</button>
+          </div>
         </div>
         <div class="field">
           <label>API Key</label>
@@ -1071,17 +1074,20 @@ updateAnimalBillboard();
 
 // ── Check Backend Health ─────────────────────────────────────────────────────
 async function checkBackendHealth() {
-  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const inputEl = document.getElementById('cfg-url');
+  if (!inputEl) return;
+  const url = inputEl.value.trim().replace(/\/$/, '');
   const pill = document.getElementById('backend-status-pill');
+  if (!url) return;
   try {
-    const res = await fetch(`${url}/health`, { method: 'GET', signal: AbortSignal.timeout(1500) });
+    const res = await fetch(`${url}/health`, { method: 'GET', signal: AbortSignal.timeout(3500) });
     if (res.ok) {
       const data = await res.json();
       Sim.backendOnline = true;
-      pill.textContent = `Backend: Connected (${data.engine})`;
+      pill.textContent = `Backend: Connected (${data.engine || 'online'})`;
       pill.className = 'pill active';
       try {
-        const sRes = await fetch(`${url}/state/cam-001`);
+        const sRes = await fetch(`${url}/state/cam-001`, { signal: AbortSignal.timeout(2000) });
         if (sRes.ok) {
           const sData = await sRes.json();
           if (sData) {
@@ -1093,13 +1099,22 @@ async function checkBackendHealth() {
       return;
     }
   } catch (e) {
-    // Backend offline
+    // Backend offline / connecting
   }
   Sim.backendOnline = false;
   pill.textContent = 'Backend: Standalone (Local Sim)';
   pill.className = 'pill';
 }
+
+// Initial check & auto-check every 3s
 checkBackendHealth();
+setInterval(checkBackendHealth, 3000);
+
+const urlInput = document.getElementById('cfg-url');
+if (urlInput) {
+  urlInput.addEventListener('input', checkBackendHealth);
+  urlInput.addEventListener('change', checkBackendHealth);
+}
 
 // ── Deterministic Trajectory: 10s Timeline ───────────────────────────────────
 function computeAnimalPositionAtTime(t) {
@@ -1253,7 +1268,7 @@ async function pollServoOnce() {
 
   const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
   try {
-    const res = await fetch(`${url}/servo/cam-001`, { signal: AbortSignal.timeout(400) });
+    const res = await fetch(`${url}/servo/cam-001`, { signal: AbortSignal.timeout(1500) });
     if (res.ok) {
       const data = await res.json();
       applyBackendResult(data);
@@ -1268,7 +1283,7 @@ async function pollActionOnce() {
 
   const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
   try {
-    const res = await fetch(`${url}/action/cam-001`, { signal: AbortSignal.timeout(600) });
+    const res = await fetch(`${url}/action/cam-001`, { signal: AbortSignal.timeout(1500) });
     if (res.ok) {
       const data = await res.json();
       if (data.action && data.action !== 'none' && data.action !== 'CONTINUE_SWEEP') {
@@ -1315,7 +1330,7 @@ async function processFrameStep() {
           method: 'POST',
           headers: { 'X-Api-Key': apiKey },
           body: fd,
-          signal: AbortSignal.timeout(800),
+          signal: AbortSignal.timeout(3000),
         });
         if (res.ok) {
           const acc = await res.json();
@@ -1329,7 +1344,7 @@ async function processFrameStep() {
           method: 'POST',
           headers: { 'X-Api-Key': apiKey },
           body: fd,
-          signal: AbortSignal.timeout(1800),
+          signal: AbortSignal.timeout(5000),
         });
 
         if (res.ok) {
@@ -1339,9 +1354,7 @@ async function processFrameStep() {
         }
       }
     } catch (err) {
-      Sim.backendOnline = false;
-      document.getElementById('backend-status-pill').textContent = 'Backend: Standalone (Local Sim)';
-      document.getElementById('backend-status-pill').className = 'pill';
+      // Non-fatal network drop
     }
   }
 

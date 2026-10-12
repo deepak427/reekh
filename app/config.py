@@ -96,10 +96,11 @@ SWEEP_SEQUENCE: list[tuple[float, float]] = [
     (-30.0,  0.0),
 ]
 
-# ── JEV (TypeSafe AI) ─────────────────────────────────────────────────────────
-JEV_API_URL   = os.getenv("JEV_API_URL",   "")
-JEV_API_KEY   = os.getenv("JEV_API_KEY",   "")
-JEV_TIMEOUT_S = float(os.getenv("JEV_TIMEOUT_S", "2.0"))
+# ── JEV / OpenRouter (TypeSafe AI) ─────────────────────────────────────────────
+JEV_API_URL   = os.getenv("JEV_API_URL", "https://openrouter.ai/api/alpha/decisions")
+JEV_API_KEY   = os.getenv("OPENROUTER_API_KEY") or os.getenv("JEV_API_KEY") or ""
+JEV_MODEL     = os.getenv("JEV_MODEL", "~typesafe/jev-latest")
+JEV_TIMEOUT_S = float(os.getenv("JEV_TIMEOUT_S", "0.8"))
 
 # ── API auth ──────────────────────────────────────────────────────────────────
 API_KEY = os.getenv("API_KEY", "change-me-in-production")
