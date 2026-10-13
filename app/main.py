@@ -15,6 +15,8 @@ Synchronous /infer endpoint is kept for the browser simulator and debugging.
 from __future__ import annotations
 
 import asyncio
+import base64
+import collections
 import logging
 from pathlib import Path
 import sys
@@ -41,6 +43,7 @@ import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from app.config import (
     ACTION_DEBOUNCE_FRAMES,
@@ -78,6 +81,13 @@ _worker_task: Optional[asyncio.Task] = None
 
 # Default camera_id used for single-device deployment
 DEFAULT_CAMERA_ID = "esp32-cam-01"
+
+# ── Frame preview ring buffer ─────────────────────────────────────────────────
+# Keeps the last 20 frames received from the camera, purely in memory.
+# Each entry: {"ts": float, "seq": int, "camera_id": str, "bytes": int, "b64": str}
+
+_PREVIEW_MAX = 20
+_preview_frames: collections.deque = collections.deque(maxlen=_PREVIEW_MAX)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -329,6 +339,15 @@ async def push_frame(
         received_ts=time.time(),
     ))
 
+    # Store in preview ring buffer (no DB, stays in memory)
+    _preview_frames.append({
+        "ts":        time.time(),
+        "seq":       seq,
+        "camera_id": camera_id,
+        "bytes":     len(raw),
+        "b64":       base64.b64encode(raw).decode(),
+    })
+
     svclog.log_frame_received(
         camera_id=camera_id,
         seq=seq,
@@ -542,6 +561,70 @@ async def _process_frame(frame: FrameData) -> None:
         action_frames_remaining=store.camera_state.action_frames_remaining,
         camera_state=store.camera_state.to_dict(),
     ))
+
+
+# ── Frame preview (debug) ─────────────────────────────────────────────────────
+
+@app.get("/frames/preview", response_class=HTMLResponse)
+def frames_preview():
+    """Browser-viewable page showing the last 20 frames received from the camera.
+
+    No auth required — intended for local debugging.
+    Frames are stored in memory only; cleared on server restart.
+    """
+    import datetime
+
+    if not _preview_frames:
+        body = "<p style='color:#888;font-size:1.1em'>No frames received yet. Is the camera active?</p>"
+    else:
+        cards = []
+        for f in reversed(_preview_frames):   # newest first
+            dt = datetime.datetime.fromtimestamp(f["ts"]).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            cards.append(
+                f"""<div class="card">
+  <div class="meta">
+    <span class="ts">📅 {dt}</span>
+    <span class="badge">seq&nbsp;{f['seq']}</span>
+    <span class="badge cam">📷 {f['camera_id']}</span>
+    <span class="badge sz">{f['bytes']:,}&nbsp;B</span>
+  </div>
+  <img src="data:image/jpeg;base64,{f['b64']}" alt="frame seq {f['seq']}" />
+</div>"""
+            )
+        body = "\n".join(cards)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta http-equiv="refresh" content="3"/>
+  <title>Camera Frame Preview</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ background: #111; color: #eee; font-family: monospace; padding: 16px; }}
+    h1 {{ font-size: 1.2em; margin-bottom: 4px; color: #7cf; }}
+    .subtitle {{ font-size: 0.8em; color: #888; margin-bottom: 16px; }}
+    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
+             padding: 10px; margin-bottom: 14px; max-width: 700px; }}
+    .meta {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
+             align-items: center; }}
+    .ts {{ color: #adf; font-size: 0.85em; }}
+    .badge {{ background: #2a2a2a; border: 1px solid #444; border-radius: 3px;
+              padding: 2px 6px; font-size: 0.75em; color: #ccc; }}
+    .cam {{ color: #fca; border-color: #654; }}
+    .sz  {{ color: #afc; border-color: #464; }}
+    img  {{ max-width: 100%; border-radius: 4px; display: block; border: 1px solid #333; }}
+    .empty {{ color: #666; margin-top: 40px; text-align: center; }}
+  </style>
+</head>
+<body>
+  <h1>📡 Camera Frame Preview</h1>
+  <p class="subtitle">Last {_PREVIEW_MAX} frames &mdash; auto-refreshes every 3 s &mdash;
+     {len(_preview_frames)} frame(s) buffered</p>
+  {body}
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 # ── Log query endpoints ───────────────────────────────────────────────────────
