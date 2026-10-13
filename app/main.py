@@ -16,14 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import collections
+import datetime
+import json
 import logging
 from pathlib import Path
 import sys
 import time
 import traceback
 from contextlib import asynccontextmanager
-from typing import Annotated, Optional
+from typing import Annotated, AsyncGenerator, Optional
 
 # Ensure inference_service root is on sys.path so 'app' package imports cleanly
 _APP_DIR = Path(__file__).resolve().parent
@@ -43,7 +44,7 @@ import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from app.config import (
     ACTION_DEBOUNCE_FRAMES,
@@ -82,12 +83,23 @@ _worker_task: Optional[asyncio.Task] = None
 # Default camera_id used for single-device deployment
 DEFAULT_CAMERA_ID = "esp32-cam-01"
 
-# ── Frame preview ring buffer ─────────────────────────────────────────────────
-# Keeps the last 20 frames received from the camera, purely in memory.
-# Each entry: {"ts": float, "seq": int, "camera_id": str, "bytes": int, "b64": str}
+# ── SSE event bus ─────────────────────────────────────────────────────────────
+# A set of asyncio.Queue objects, one per connected SSE client.
+# When an event happens (frame received, status posted) we push a JSON string
+# into every queue. Clients that disconnect are cleaned up lazily.
 
-_PREVIEW_MAX = 20
-_preview_frames: collections.deque = collections.deque(maxlen=_PREVIEW_MAX)
+_sse_clients: set[asyncio.Queue] = set()
+
+def _sse_broadcast(event_type: str, data: dict) -> None:
+    """Push one SSE event to every connected client. Fire-and-forget."""
+    payload = json.dumps({"type": event_type, **data})
+    dead = set()
+    for q in _sse_clients:
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            dead.add(q)
+    _sse_clients.difference_update(dead)
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -339,14 +351,27 @@ async def push_frame(
         received_ts=time.time(),
     ))
 
-    # Store in preview ring buffer (no DB, stays in memory)
-    _preview_frames.append({
-        "ts":        time.time(),
-        "seq":       seq,
-        "camera_id": camera_id,
-        "bytes":     len(raw),
-        "b64":       base64.b64encode(raw).decode(),
-    })
+    # Broadcast a small thumbnail to SSE clients (no memory accumulation)
+    if _sse_clients:
+        try:
+            arr = np.frombuffer(raw, np.uint8)
+            thumb = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if thumb is not None:
+                # Resize to max 160px wide, keep aspect ratio
+                h, w = thumb.shape[:2]
+                scale = 160.0 / w
+                thumb = cv2.resize(thumb, (160, int(h * scale)))
+                _, enc = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                b64 = base64.b64encode(enc.tobytes()).decode()
+                _sse_broadcast("frame", {
+                    "ts":        datetime.datetime.now().isoformat(timespec="milliseconds"),
+                    "seq":       seq,
+                    "camera_id": camera_id,
+                    "bytes":     len(raw),
+                    "thumb":     b64,
+                })
+        except Exception:
+            pass  # Never let preview break the actual frame pipeline
 
     svclog.log_frame_received(
         camera_id=camera_id,
@@ -563,65 +588,220 @@ async def _process_frame(frame: FrameData) -> None:
     ))
 
 
-# ── Frame preview (debug) ─────────────────────────────────────────────────────
+# ── ESP32 status reporting ────────────────────────────────────────────────────
 
-@app.get("/frames/preview", response_class=HTMLResponse)
-def frames_preview():
-    """Browser-viewable page showing the last 20 frames received from the camera.
+@app.post("/status", status_code=status.HTTP_204_NO_CONTENT,
+          dependencies=[Depends(verify_api_key)])
+async def push_status(
+    camera_id: Annotated[str,   Form()] = DEFAULT_CAMERA_ID,
+    state:     Annotated[str,   Form()] = "unknown",   # IDLE / ACTIVE / BOOT / ERROR
+    message:   Annotated[str,   Form()] = "",
+    uptime_ms: Annotated[int,   Form()] = 0,
+    wifi_rssi: Annotated[int,   Form()] = 0,
+    free_heap: Annotated[int,   Form()] = 0,
+):
+    """ESP32 posts its current state here so the dashboard can show it as a log."""
+    logger.info("ESP_STATUS camera=%s state=%s msg=%s rssi=%d heap=%d",
+                camera_id, state, message, wifi_rssi, free_heap)
+    _sse_broadcast("status", {
+        "ts":        datetime.datetime.now().isoformat(timespec="milliseconds"),
+        "camera_id": camera_id,
+        "state":     state,
+        "message":   message,
+        "uptime_ms": uptime_ms,
+        "wifi_rssi": wifi_rssi,
+        "free_heap": free_heap,
+    })
 
-    No auth required — intended for local debugging.
-    Frames are stored in memory only; cleared on server restart.
+
+# ── SSE stream ────────────────────────────────────────────────────────────────
+
+@app.get("/monitor/stream")
+async def monitor_stream():
+    """Server-Sent Events stream — delivers frame thumbnails and status logs
+    to the dashboard in real time. No polling needed.
     """
-    import datetime
+    queue: asyncio.Queue = asyncio.Queue(maxsize=30)
+    _sse_clients.add(queue)
 
-    if not _preview_frames:
-        body = "<p style='color:#888;font-size:1.1em'>No frames received yet. Is the camera active?</p>"
-    else:
-        cards = []
-        for f in reversed(_preview_frames):   # newest first
-            dt = datetime.datetime.fromtimestamp(f["ts"]).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            cards.append(
-                f"""<div class="card">
-  <div class="meta">
-    <span class="ts">📅 {dt}</span>
-    <span class="badge">seq&nbsp;{f['seq']}</span>
-    <span class="badge cam">📷 {f['camera_id']}</span>
-    <span class="badge sz">{f['bytes']:,}&nbsp;B</span>
-  </div>
-  <img src="data:image/jpeg;base64,{f['b64']}" alt="frame seq {f['seq']}" />
-</div>"""
-            )
-        body = "\n".join(cards)
+    async def generate() -> AsyncGenerator[str, None]:
+        # Send a heartbeat comment every 15 s to keep the connection alive
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"   # SSE comment, keeps connection alive
+        except asyncio.CancelledError:
+            pass
+        finally:
+            _sse_clients.discard(queue)
 
-    html = f"""<!DOCTYPE html>
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx buffering if behind proxy
+        },
+    )
+
+
+# ── Monitor dashboard ─────────────────────────────────────────────────────────
+
+@app.get("/monitor", response_class=HTMLResponse)
+def monitor_ui():
+    """Live dashboard — shows ESP32 status log + latest frame thumbnail.
+    Opens SSE connection automatically, no page refresh needed.
+    """
+    html = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta http-equiv="refresh" content="3"/>
-  <title>Camera Frame Preview</title>
-  <style>
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ background: #111; color: #eee; font-family: monospace; padding: 16px; }}
-    h1 {{ font-size: 1.2em; margin-bottom: 4px; color: #7cf; }}
-    .subtitle {{ font-size: 0.8em; color: #888; margin-bottom: 16px; }}
-    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 6px;
-             padding: 10px; margin-bottom: 14px; max-width: 700px; }}
-    .meta {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;
-             align-items: center; }}
-    .ts {{ color: #adf; font-size: 0.85em; }}
-    .badge {{ background: #2a2a2a; border: 1px solid #444; border-radius: 3px;
-              padding: 2px 6px; font-size: 0.75em; color: #ccc; }}
-    .cam {{ color: #fca; border-color: #654; }}
-    .sz  {{ color: #afc; border-color: #464; }}
-    img  {{ max-width: 100%; border-radius: 4px; display: block; border: 1px solid #333; }}
-    .empty {{ color: #666; margin-top: 40px; text-align: center; }}
-  </style>
+<meta charset="UTF-8"/>
+<title>Wildlife Camera Monitor</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d0d;color:#ddd;font-family:monospace;font-size:13px;
+     display:flex;flex-direction:column;height:100vh;overflow:hidden}
+header{padding:10px 14px;background:#111;border-bottom:1px solid #222;
+       display:flex;align-items:center;gap:12px}
+header h1{font-size:1em;color:#7cf;white-space:nowrap}
+#conn{font-size:0.75em;padding:2px 8px;border-radius:10px;background:#333;color:#888}
+#conn.ok{background:#1a3a1a;color:#4d4}
+#conn.err{background:#3a1a1a;color:#d44}
+main{display:flex;flex:1;overflow:hidden}
+#log-col{flex:1;display:flex;flex-direction:column;border-right:1px solid #222}
+#log-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;
+            font-size:0.75em;color:#666;display:flex;justify-content:space-between}
+#log{flex:1;overflow-y:auto;padding:6px 10px}
+.entry{padding:3px 0;border-bottom:1px solid #181818;display:flex;gap:8px;
+       align-items:baseline}
+.entry .t{color:#555;white-space:nowrap;flex-shrink:0}
+.entry .tag{padding:1px 5px;border-radius:3px;font-size:0.7em;
+            white-space:nowrap;flex-shrink:0}
+.tag.frame {background:#1a2a3a;color:#7af}
+.tag.status{background:#2a1a2a;color:#b7f}
+.tag.idle  {background:#1e1e1e;color:#666}
+.tag.active{background:#1a2e1a;color:#4c4}
+.tag.boot  {background:#2a2a1a;color:#cc4}
+.tag.error {background:#2e1a1a;color:#d44}
+.entry .msg{color:#aaa;word-break:break-all}
+.entry .badges{display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0}
+.b{background:#1e1e1e;border:1px solid #333;border-radius:2px;
+   padding:1px 4px;font-size:0.7em;color:#888}
+#frame-col{width:200px;display:flex;flex-direction:column;flex-shrink:0}
+#frame-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;
+              font-size:0.75em;color:#666}
+#frame-wrap{padding:10px;display:flex;flex-direction:column;gap:6px}
+#thumb{width:100%;border-radius:4px;border:1px solid #333;display:block}
+#frame-meta{font-size:0.7em;color:#555;line-height:1.6}
+#no-frame{color:#444;font-size:0.8em;text-align:center;margin-top:20px}
+</style>
 </head>
 <body>
-  <h1>📡 Camera Frame Preview</h1>
-  <p class="subtitle">Last {_PREVIEW_MAX} frames &mdash; auto-refreshes every 3 s &mdash;
-     {len(_preview_frames)} frame(s) buffered</p>
-  {body}
+<header>
+  <h1>📡 Wildlife Camera Monitor</h1>
+  <span id="conn">connecting…</span>
+</header>
+<main>
+  <div id="log-col">
+    <div id="log-header">
+      <span>Event log</span>
+      <span id="count">0 events</span>
+    </div>
+    <div id="log"></div>
+  </div>
+  <div id="frame-col">
+    <div id="frame-header">Latest frame</div>
+    <div id="frame-wrap">
+      <div id="no-frame">No frame yet</div>
+      <img id="thumb" style="display:none" alt="latest frame"/>
+      <div id="frame-meta"></div>
+    </div>
+  </div>
+</main>
+<script>
+const log     = document.getElementById('log');
+const conn    = document.getElementById('conn');
+const countEl = document.getElementById('count');
+const thumb   = document.getElementById('thumb');
+const noFrame = document.getElementById('no-frame');
+const frameMeta = document.getElementById('frame-meta');
+let eventCount = 0;
+const MAX_ROWS = 200;
+
+function ts(iso){
+  // Show only HH:MM:SS.mmm
+  return iso.slice(11, 23);
+}
+
+function addRow(html){
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  log.prepend(div);          // newest at top
+  eventCount++;
+  countEl.textContent = eventCount + ' events';
+  // Trim old rows
+  while(log.children.length > MAX_ROWS) log.removeChild(log.lastChild);
+}
+
+function badges(...pairs){
+  return pairs.map(([k,v]) => `<span class="b">${k}&nbsp;${v}</span>`).join('');
+}
+
+const es = new EventSource('/monitor/stream');
+
+es.onopen = () => {
+  conn.textContent = 'connected';
+  conn.className = 'ok';
+};
+
+es.onerror = () => {
+  conn.textContent = 'disconnected — retrying';
+  conn.className = 'err';
+};
+
+es.onmessage = (e) => {
+  let d;
+  try { d = JSON.parse(e.data); } catch { return; }
+
+  if(d.type === 'frame'){
+    // Update thumbnail
+    thumb.src = 'data:image/jpeg;base64,' + d.thumb;
+    thumb.style.display = 'block';
+    noFrame.style.display = 'none';
+    frameMeta.innerHTML =
+      `<div>${ts(d.ts)}</div>` +
+      `<div>seq&nbsp;${d.seq}</div>` +
+      `<div>${(d.bytes/1024).toFixed(1)}&nbsp;KB</div>` +
+      `<div>${d.camera_id}</div>`;
+
+    // Also add a compact log row for the frame
+    addRow(`<div class="entry">
+      <span class="t">${ts(d.ts)}</span>
+      <span class="tag frame">FRAME</span>
+      <span class="msg">#${d.seq}</span>
+      <span class="badges">${badges(['cam',d.camera_id],['sz',(d.bytes/1024).toFixed(1)+'KB'])}</span>
+    </div>`);
+
+  } else if(d.type === 'status'){
+    const stateClass = (d.state||'').toLowerCase();
+    const uptime = d.uptime_ms ? Math.floor(d.uptime_ms/1000)+'s' : '—';
+    const rssi   = d.wifi_rssi ? d.wifi_rssi+'dBm' : '—';
+    const heap   = d.free_heap ? Math.floor(d.free_heap/1024)+'KB' : '—';
+
+    addRow(`<div class="entry">
+      <span class="t">${ts(d.ts)}</span>
+      <span class="tag status"><span class="tag ${stateClass}">${d.state}</span></span>
+      <span class="msg">${d.message||''}</span>
+      <span class="badges">
+        ${badges(['up',uptime],['rssi',rssi],['heap',heap])}
+      </span>
+    </div>`);
+  }
+};
+</script>
 </body>
 </html>"""
     return HTMLResponse(content=html)
