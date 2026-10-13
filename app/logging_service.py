@@ -81,6 +81,9 @@ def log_frame_received(
         "image_width":  image_width,
         "image_height": image_height,
     })
+
+
+def log_action(*, camera_id: str, action: str, class_name: str | None, trigger: str) -> None:
     """trigger: 'new' | 'debounce' | 'fallback'"""
     _write("action", {
         "camera_id":  camera_id,

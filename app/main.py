@@ -351,24 +351,28 @@ async def push_frame(
         received_ts=time.time(),
     ))
 
-    # Broadcast a small thumbnail to SSE clients (no memory accumulation)
+    # Broadcast thumbnail + full frame to SSE clients (no memory accumulation)
     if _sse_clients:
         try:
             arr = np.frombuffer(raw, np.uint8)
-            thumb = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if thumb is not None:
-                # Resize to max 160px wide, keep aspect ratio
-                h, w = thumb.shape[:2]
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is not None:
+                # Thumbnail: 160px wide
+                h, w = img.shape[:2]
                 scale = 160.0 / w
-                thumb = cv2.resize(thumb, (160, int(h * scale)))
-                _, enc = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                b64 = base64.b64encode(enc.tobytes()).decode()
+                small = cv2.resize(img, (160, int(h * scale)))
+                _, enc_small = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                thumb_b64 = base64.b64encode(enc_small.tobytes()).decode()
+                # Full: re-encode at reasonable quality (original may be already JPEG)
+                _, enc_full = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                full_b64 = base64.b64encode(enc_full.tobytes()).decode()
                 _sse_broadcast("frame", {
                     "ts":        datetime.datetime.now().isoformat(timespec="milliseconds"),
                     "seq":       seq,
                     "camera_id": camera_id,
                     "bytes":     len(raw),
-                    "thumb":     b64,
+                    "thumb":     thumb_b64,
+                    "full":      full_b64,
                 })
         except Exception:
             pass  # Never let preview break the actual frame pipeline
@@ -675,11 +679,9 @@ main{display:flex;flex:1;overflow:hidden}
 #log-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;
             font-size:0.75em;color:#666;display:flex;justify-content:space-between}
 #log{flex:1;overflow-y:auto;padding:6px 10px}
-.entry{padding:3px 0;border-bottom:1px solid #181818;display:flex;gap:8px;
-       align-items:baseline}
+.entry{padding:3px 0;border-bottom:1px solid #181818;display:flex;gap:8px;align-items:baseline}
 .entry .t{color:#555;white-space:nowrap;flex-shrink:0}
-.entry .tag{padding:1px 5px;border-radius:3px;font-size:0.7em;
-            white-space:nowrap;flex-shrink:0}
+.entry .tag{padding:1px 5px;border-radius:3px;font-size:0.7em;white-space:nowrap;flex-shrink:0}
 .tag.frame {background:#1a2a3a;color:#7af}
 .tag.status{background:#2a1a2a;color:#b7f}
 .tag.idle  {background:#1e1e1e;color:#666}
@@ -688,15 +690,23 @@ main{display:flex;flex:1;overflow:hidden}
 .tag.error {background:#2e1a1a;color:#d44}
 .entry .msg{color:#aaa;word-break:break-all}
 .entry .badges{display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0}
-.b{background:#1e1e1e;border:1px solid #333;border-radius:2px;
-   padding:1px 4px;font-size:0.7em;color:#888}
-#frame-col{width:200px;display:flex;flex-direction:column;flex-shrink:0}
-#frame-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;
-              font-size:0.75em;color:#666}
+.b{background:#1e1e1e;border:1px solid #333;border-radius:2px;padding:1px 4px;font-size:0.7em;color:#888}
+#frame-col{width:190px;display:flex;flex-direction:column;flex-shrink:0}
+#frame-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;font-size:0.75em;color:#666}
 #frame-wrap{padding:10px;display:flex;flex-direction:column;gap:6px}
-#thumb{width:100%;border-radius:4px;border:1px solid #333;display:block}
-#frame-meta{font-size:0.7em;color:#555;line-height:1.6}
+#thumb{width:100%;border-radius:4px;border:1px solid #444;display:block;cursor:pointer;transition:opacity .15s}
+#thumb:hover{opacity:.8}
+#frame-meta{font-size:0.7em;color:#555;line-height:1.7}
 #no-frame{color:#444;font-size:0.8em;text-align:center;margin-top:20px}
+/* Modal */
+#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);
+       z-index:100;align-items:center;justify-content:center;cursor:zoom-out}
+#modal.show{display:flex}
+#modal img{max-width:95vw;max-height:95vh;border-radius:6px;border:1px solid #444;
+           box-shadow:0 0 40px #000}
+#modal-info{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
+            background:rgba(0,0,0,.7);color:#aaa;font-size:0.75em;padding:4px 12px;
+            border-radius:10px;pointer-events:none}
 </style>
 </head>
 <body>
@@ -713,7 +723,7 @@ main{display:flex;flex:1;overflow:hidden}
     <div id="log"></div>
   </div>
   <div id="frame-col">
-    <div id="frame-header">Latest frame</div>
+    <div id="frame-header">Latest frame — click to enlarge</div>
     <div id="frame-wrap">
       <div id="no-frame">No frame yet</div>
       <img id="thumb" style="display:none" alt="latest frame"/>
@@ -721,63 +731,77 @@ main{display:flex;flex:1;overflow:hidden}
     </div>
   </div>
 </main>
+<!-- Full-size modal -->
+<div id="modal">
+  <img id="modal-img" alt="full frame"/>
+  <div id="modal-info"></div>
+</div>
 <script>
-const log     = document.getElementById('log');
-const conn    = document.getElementById('conn');
-const countEl = document.getElementById('count');
-const thumb   = document.getElementById('thumb');
-const noFrame = document.getElementById('no-frame');
-const frameMeta = document.getElementById('frame-meta');
+const log      = document.getElementById('log');
+const conn     = document.getElementById('conn');
+const countEl  = document.getElementById('count');
+const thumb    = document.getElementById('thumb');
+const noFrame  = document.getElementById('no-frame');
+const frameMeta= document.getElementById('frame-meta');
+const modal    = document.getElementById('modal');
+const modalImg = document.getElementById('modal-img');
+const modalInfo= document.getElementById('modal-info');
 let eventCount = 0;
 const MAX_ROWS = 200;
+let lastFull   = null;   // stores latest full-res b64
 
-function ts(iso){
-  // Show only HH:MM:SS.mmm
-  return iso.slice(11, 23);
-}
+function ts(iso){ return iso.slice(11,23); }
 
 function addRow(html){
   const div = document.createElement('div');
   div.innerHTML = html;
-  log.prepend(div);          // newest at top
+  log.prepend(div);
   eventCount++;
   countEl.textContent = eventCount + ' events';
-  // Trim old rows
   while(log.children.length > MAX_ROWS) log.removeChild(log.lastChild);
 }
 
 function badges(...pairs){
-  return pairs.map(([k,v]) => `<span class="b">${k}&nbsp;${v}</span>`).join('');
+  return pairs.map(([k,v])=>`<span class="b">${k}&nbsp;${v}</span>`).join('');
 }
+
+// Open modal on thumbnail click
+thumb.addEventListener('click', () => {
+  if(!lastFull) return;
+  modalImg.src = 'data:image/jpeg;base64,' + lastFull.b64;
+  modalInfo.textContent = `seq ${lastFull.seq}  •  ${ts(lastFull.ts)}  •  ${(lastFull.bytes/1024).toFixed(1)} KB`;
+  modal.classList.add('show');
+});
+modal.addEventListener('click', () => modal.classList.remove('show'));
+document.addEventListener('keydown', e => { if(e.key==='Escape') modal.classList.remove('show'); });
 
 const es = new EventSource('/monitor/stream');
 
-es.onopen = () => {
-  conn.textContent = 'connected';
-  conn.className = 'ok';
-};
-
-es.onerror = () => {
-  conn.textContent = 'disconnected — retrying';
-  conn.className = 'err';
-};
+es.onopen = () => { conn.textContent='connected'; conn.className='ok'; };
+es.onerror = () => { conn.textContent='disconnected — retrying'; conn.className='err'; };
 
 es.onmessage = (e) => {
   let d;
   try { d = JSON.parse(e.data); } catch { return; }
 
   if(d.type === 'frame'){
-    // Update thumbnail
+    // Store full res for modal
+    if(d.full) lastFull = {b64: d.full, seq: d.seq, ts: d.ts, bytes: d.bytes};
+
+    // Update sidebar thumbnail
     thumb.src = 'data:image/jpeg;base64,' + d.thumb;
     thumb.style.display = 'block';
     noFrame.style.display = 'none';
     frameMeta.innerHTML =
-      `<div>${ts(d.ts)}</div>` +
-      `<div>seq&nbsp;${d.seq}</div>` +
-      `<div>${(d.bytes/1024).toFixed(1)}&nbsp;KB</div>` +
-      `<div>${d.camera_id}</div>`;
+      `<div>${ts(d.ts)}</div><div>seq&nbsp;${d.seq}</div>` +
+      `<div>${(d.bytes/1024).toFixed(1)}&nbsp;KB</div><div>${d.camera_id}</div>`;
 
-    // Also add a compact log row for the frame
+    // If modal is open, update it live too
+    if(modal.classList.contains('show') && d.full){
+      modalImg.src = 'data:image/jpeg;base64,' + d.full;
+      modalInfo.textContent = `seq ${d.seq}  •  ${ts(d.ts)}  •  ${(d.bytes/1024).toFixed(1)} KB`;
+    }
+
     addRow(`<div class="entry">
       <span class="t">${ts(d.ts)}</span>
       <span class="tag frame">FRAME</span>
@@ -786,18 +810,15 @@ es.onmessage = (e) => {
     </div>`);
 
   } else if(d.type === 'status'){
-    const stateClass = (d.state||'').toLowerCase();
+    const sc = (d.state||'').toLowerCase();
     const uptime = d.uptime_ms ? Math.floor(d.uptime_ms/1000)+'s' : '—';
     const rssi   = d.wifi_rssi ? d.wifi_rssi+'dBm' : '—';
     const heap   = d.free_heap ? Math.floor(d.free_heap/1024)+'KB' : '—';
-
     addRow(`<div class="entry">
       <span class="t">${ts(d.ts)}</span>
-      <span class="tag status"><span class="tag ${stateClass}">${d.state}</span></span>
+      <span class="tag ${sc}">${d.state}</span>
       <span class="msg">${d.message||''}</span>
-      <span class="badges">
-        ${badges(['up',uptime],['rssi',rssi],['heap',heap])}
-      </span>
+      <span class="badges">${badges(['up',uptime],['rssi',rssi],['heap',heap])}</span>
     </div>`);
   }
 };
