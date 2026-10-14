@@ -608,6 +608,76 @@ async def _process_frame(frame: FrameData) -> None:
     })
     store.push_ws_result(result_json)
 
+    # Broadcast inference result to SSE clients so /monitor dashboard updates
+    _sse_broadcast("inference", {
+        "ts":           datetime.datetime.now().isoformat(timespec="milliseconds"),
+        "camera_id":    DEFAULT_CAMERA_ID,
+        "seq":          frame.seq,
+        "detected":     detection_out is not None,
+        "class_name":   detection_out.class_name if detection_out else None,
+        "confidence":   detection_out.confidence if detection_out else None,
+        "phase":        phase.value,
+        "action":       action.value,
+        "pan":          round(movement.pan_absolute, 2),
+        "tilt":         round(movement.tilt_absolute, 2),
+        "inference_ms": round(inference_ms, 1),
+        "total_ms":     round(total_ms, 1),
+    })
+
+
+# ── Simulate PIR (dashboard button) ──────────────────────────────────────────
+
+@app.post("/simulate-pir")
+async def simulate_pir():
+    """Send a simulate_pir command to the connected ESP32 over WebSocket.
+    Also broadcasts an ACTIVE status to the SSE dashboard so the log updates.
+    Used by the /monitor dashboard button when testing without physical PIR.
+    """
+    # Broadcast to SSE dashboard so log shows the event
+    _sse_broadcast("status", {
+        "ts":        datetime.datetime.now().isoformat(timespec="milliseconds"),
+        "camera_id": DEFAULT_CAMERA_ID,
+        "state":     "ACTIVE",
+        "message":   "PIR simulated from dashboard",
+        "uptime_ms": 0,
+        "wifi_rssi": 0,
+        "free_heap": 0,
+    })
+
+    # Send command to ESP32 over WebSocket if connected
+    ws_queue = store._ws_result_queue
+    if ws_queue is not None:
+        try:
+            ws_queue.put_nowait('{"type":"simulate_pir"}')
+            return {"status": "sent", "message": "simulate_pir sent to ESP32"}
+        except asyncio.QueueFull:
+            return {"status": "queued_full", "message": "ESP32 queue full, try again"}
+    else:
+        return {"status": "no_device", "message": "No ESP32 connected via WebSocket"}
+
+
+@app.post("/simulate-idle")
+async def simulate_idle():
+    """Force ESP32 back to IDLE state from the dashboard."""
+    _sse_broadcast("status", {
+        "ts":        datetime.datetime.now().isoformat(timespec="milliseconds"),
+        "camera_id": DEFAULT_CAMERA_ID,
+        "state":     "IDLE",
+        "message":   "Forced IDLE from dashboard",
+        "uptime_ms": 0,
+        "wifi_rssi": 0,
+        "free_heap": 0,
+    })
+
+    ws_queue = store._ws_result_queue
+    if ws_queue is not None:
+        try:
+            ws_queue.put_nowait('{"type":"simulate_idle"}')
+            return {"status": "sent"}
+        except asyncio.QueueFull:
+            return {"status": "queued_full"}
+    return {"status": "no_device"}
+
 
 # ── WebSocket endpoint for ESP32-CAM ─────────────────────────────────────────
 
@@ -754,6 +824,19 @@ main{display:flex;flex:1;overflow:hidden}
 <header>
   <h1>📡 Wildlife Camera Monitor</h1>
   <span id="conn">connecting…</span>
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+    <button id="btn-pir"
+      style="background:#1a3a1a;color:#4d4;border:1px solid #2a5a2a;border-radius:4px;
+             padding:4px 12px;font-family:monospace;font-size:0.8em;cursor:pointer">
+      ▶ Simulate PIR
+    </button>
+    <button id="btn-idle"
+      style="background:#2a2a1a;color:#aa4;border:1px solid #4a4a2a;border-radius:4px;
+             padding:4px 12px;font-family:monospace;font-size:0.8em;cursor:pointer">
+      ⏹ Force IDLE
+    </button>
+    <span id="sim-msg" style="font-size:0.75em;color:#555"></span>
+  </div>
 </header>
 <main>
   <div id="log-col">
@@ -769,6 +852,11 @@ main{display:flex;flex:1;overflow:hidden}
       <div id="no-frame">No frame yet</div>
       <img id="thumb" style="display:none" alt="latest frame"/>
       <div id="frame-meta"></div>
+      <div id="infer-result"
+           style="display:none;margin-top:6px;padding:6px;background:#111;
+                  border:1px solid #222;border-radius:3px;font-size:0.7em;
+                  color:#888;line-height:1.8">
+      </div>
     </div>
   </div>
 </main>
@@ -861,8 +949,47 @@ es.onmessage = (e) => {
       <span class="msg">${d.message||''}</span>
       <span class="badges">${badges(['up',uptime],['rssi',rssi],['heap',heap])}</span>
     </div>`);
+  } else if(d.type === 'inference'){
+    // Inference result — update sidebar panel
+    const inferEl = document.getElementById('infer-result');
+    inferEl.style.display = 'block';
+    const det = d.detected ? `<span style="color:#4d4">✓ ${d.class_name} (${(d.confidence*100).toFixed(1)}%)</span>`
+                           : `<span style="color:#666">no detection</span>`;
+    inferEl.innerHTML =
+      `<div>${det}</div>` +
+      `<div>phase: <span style="color:#7af">${d.phase||'—'}</span></div>` +
+      `<div>action: <span style="color:#fa4">${d.action||'none'}</span></div>` +
+      `<div>pan: ${(d.pan||0).toFixed(1)}°  tilt: ${(d.tilt||0).toFixed(1)}°</div>` +
+      `<div style="color:#444">infer ${d.inference_ms||0}ms  total ${d.total_ms||0}ms</div>`;
   }
 };
+
+// ── Simulate buttons ──────────────────────────────────────────────────────────
+const simMsg = document.getElementById('sim-msg');
+
+document.getElementById('btn-pir').addEventListener('click', async () => {
+  simMsg.textContent = 'sending…';
+  try {
+    const r = await fetch('/simulate-pir', {method:'POST'});
+    const j = await r.json();
+    simMsg.textContent = j.message || j.status;
+    setTimeout(() => { simMsg.textContent = ''; }, 3000);
+  } catch(e) {
+    simMsg.textContent = 'error';
+  }
+});
+
+document.getElementById('btn-idle').addEventListener('click', async () => {
+  simMsg.textContent = 'sending…';
+  try {
+    const r = await fetch('/simulate-idle', {method:'POST'});
+    const j = await r.json();
+    simMsg.textContent = j.message || j.status;
+    setTimeout(() => { simMsg.textContent = ''; }, 3000);
+  } catch(e) {
+    simMsg.textContent = 'error';
+  }
+});
 </script>
 </body>
 </html>"""
