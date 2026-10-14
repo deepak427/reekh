@@ -5,6 +5,7 @@ from its first frame, which is acceptable for a single-device deployment.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -110,6 +111,9 @@ class DeviceStore:
         self._slot:           FrameSlot                 = FrameSlot()
         self._latest_servo:   Optional[ServoPollResponse]  = None
         self._latest_action:  Optional[ActionPollResponse] = None
+        # WebSocket result queue — set when ESP32 connects, cleared on disconnect.
+        # Background worker puts JSON strings here; ws_handler sends them to ESP32.
+        self._ws_result_queue: Optional[asyncio.Queue] = None
 
     # ── Accessors ─────────────────────────────────────────────────────────────
 
@@ -202,6 +206,20 @@ class DeviceStore:
 
     def set_latest_action(self, resp: ActionPollResponse) -> None:
         self._latest_action = resp
+
+    # ── WebSocket result queue ────────────────────────────────────────────────
+
+    def set_ws_result_queue(self, q: Optional[asyncio.Queue]) -> None:
+        self._ws_result_queue = q
+
+    def push_ws_result(self, result_json: str) -> None:
+        """Called by background worker after inference. Non-blocking."""
+        if self._ws_result_queue is None:
+            return
+        try:
+            self._ws_result_queue.put_nowait(result_json)
+        except asyncio.QueueFull:
+            pass  # drop if ESP32 isn't reading fast enough
 
 
 # ── Global singleton ──────────────────────────────────────────────────────────

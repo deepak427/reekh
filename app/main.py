@@ -42,7 +42,7 @@ logging.basicConfig(
 
 import cv2
 import numpy as np
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
@@ -57,6 +57,7 @@ from app.config import (
 from app.inference import RFDETRInference
 from app.jev_client import decide_action
 import app.logging_service as svclog
+from app.ws_handler import handle_camera_ws, set_sse_broadcast
 from app.schemas import (
     Action,
     ActionPollResponse,
@@ -118,6 +119,10 @@ async def lifespan(_: FastAPI):
     logger.info("Model loaded from %s (%s)", MODEL_PATH, _model.engine_name)
 
     _worker_task = asyncio.create_task(_background_frame_processor())
+
+    # Wire SSE broadcast into the WebSocket handler so frame thumbnails
+    # appear on the /monitor dashboard regardless of which transport the ESP32 uses
+    set_sse_broadcast(_sse_broadcast)
 
     yield
 
@@ -591,8 +596,44 @@ async def _process_frame(frame: FrameData) -> None:
         camera_state=store.camera_state.to_dict(),
     ))
 
+    # Push result directly to ESP32 over WebSocket (if connected).
+    # This replaces the poll pattern — ESP32 no longer needs GET /servo or GET /action.
+    result_json = json.dumps({
+        "pan":    round(movement.pan_absolute, 2),
+        "tilt":   round(movement.tilt_absolute, 2),
+        "skip":   movement.skip,
+        "action": action.value,
+        "phase":  phase.value,
+        "seq":    frame.seq,
+    })
+    store.push_ws_result(result_json)
 
-# ── ESP32 status reporting ────────────────────────────────────────────────────
+
+# ── WebSocket endpoint for ESP32-CAM ─────────────────────────────────────────
+
+@app.websocket("/ws/{camera_id}")
+async def camera_websocket(websocket: WebSocket, camera_id: str):
+    """Persistent WebSocket connection for the ESP32-CAM.
+
+    Replaces the POST /frame + GET /servo + GET /action + POST /status flow.
+    Single connection handles all bidirectional communication:
+      - ESP32 pushes frames (text metadata + binary JPEG)
+      - ESP32 pushes status messages
+      - Backend pushes inference results (servo targets + action)
+
+    Auth: x-api-key header checked on upgrade.
+    """
+    # Check API key from headers on WebSocket upgrade
+    api_key_header = websocket.headers.get("x-api-key", "")
+    if API_KEY and API_KEY != "change-me-in-production":
+        if api_key_header != API_KEY:
+            await websocket.close(code=4001, reason="Invalid API key")
+            return
+
+    await handle_camera_ws(websocket, camera_id)
+
+
+# ── ESP32 status reporting (HTTP fallback, kept for compatibility) ────────────
 
 @app.post("/status", status_code=status.HTTP_204_NO_CONTENT,
           dependencies=[Depends(verify_api_key)])
