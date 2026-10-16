@@ -18,28 +18,24 @@ from app.schemas import Action
 
 # ── Exhaustive per-class fallback for all 17 dataset classes ─────────────────
 FALLBACK_MAP: dict[str, Action] = {
-    # Apex predators & dangerous beasts -> strobe flash
+    # All species trigger flash_light in V1 (spotlight wired, speaker not wired)
     "AmurTiger":   Action.flash_light,
     "Leopard":     Action.flash_light,
     "LeopardCat":  Action.flash_light,
     "BlackBear":   Action.flash_light,
     "WildBoar":    Action.flash_light,
-
-    # Large herbivores & crop-eaters -> predator bark sound
-    "Cow":         Action.bark_sound,
-    "SikaDeer":    Action.bark_sound,
-    "RoeDeer":     Action.bark_sound,
-    "MuskDeer":    Action.bark_sound,
-
-    # Small carnivores, foragers & pests -> bark sound
-    "Dog":         Action.bark_sound,
-    "Badger":      Action.bark_sound,
-    "RedFox":      Action.bark_sound,
-    "RaccoonDog":  Action.bark_sound,
-    "Hare":        Action.bark_sound,
-    "Sable":       Action.bark_sound,
-    "Weasel":      Action.bark_sound,
-    "Y-T-Marten":  Action.bark_sound,
+    "Cow":         Action.flash_light,
+    "SikaDeer":    Action.flash_light,
+    "RoeDeer":     Action.flash_light,
+    "MuskDeer":    Action.flash_light,
+    "Dog":         Action.flash_light,
+    "Badger":      Action.flash_light,
+    "RedFox":      Action.flash_light,
+    "RaccoonDog":  Action.flash_light,
+    "Hare":        Action.flash_light,
+    "Sable":       Action.flash_light,
+    "Weasel":      Action.flash_light,
+    "Y-T-Marten":  Action.flash_light,
 }
 
 
@@ -54,19 +50,15 @@ async def decide_action(
 ) -> Action:
     """Return the Action to take for the current detection.
 
-    Queries OpenRouter Decisions API (~typesafe/jev-latest). Falls back to
-    deterministic per-species rules on missing key, errors, or timeout (>800ms).
+    V1 mode: Always commands FLASH_LIGHT for any detected animal.
     """
     # Debounce: if action is actively playing out, don't restart it
     if action_frames_remaining > 0 and active_action != Action.none:
         svclog.log_jev(camera_id=camera_id, outcome="skipped")
         return active_action
 
-    # Fast local fallback if no OpenRouter API key configured
-    if not JEV_API_KEY:
-        action = _local_fallback(detection)
-        svclog.log_jev(camera_id=camera_id, outcome="fallback")
-        return action
+    svclog.log_jev(camera_id=camera_id, outcome="flash_light_v1")
+    return Action.flash_light
 
     class_name = detection.get("class_name", "Unknown")
     confidence = float(detection.get("score", 0.0))
