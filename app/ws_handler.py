@@ -135,7 +135,25 @@ async def _receive_loop(
 
             msg_type = data.get("type", "frame")
 
-            if msg_type == "status":
+            if msg_type == "reset":
+                store.reset()
+                logger.info("STATE_RESET camera=%s (explicit reset command)", camera_id)
+                if _sse_broadcast_fn:
+                    _sse_broadcast_fn("status", {
+                        "ts":        datetime.datetime.now().isoformat(timespec="milliseconds"),
+                        "camera_id": camera_id,
+                        "state":     "IDLE",
+                        "message":   "Camera state reset to (0,0)",
+                        "uptime_ms": 0,
+                        "wifi_rssi": 0,
+                        "free_heap": 0,
+                    })
+
+            elif msg_type == "status":
+                if data.get("state") in ("IDLE", "BOOT"):
+                    store.reset()
+                    logger.info("STATE_RESET camera=%s (state=%s)", camera_id, data.get("state"))
+
                 # ESP32 status report — broadcast to SSE dashboard
                 logger.info(
                     "ESP_STATUS camera=%s state=%s msg=%s rssi=%d heap=%d",

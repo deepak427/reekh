@@ -21,6 +21,7 @@ from app.config import (
     MAX_VELOCITY_COMP_PX,
     MIN_SERVO_DELTA_DEG,
     PAN_GAIN,
+    PAN_INVERT,
     PAN_MAX,
     PAN_MIN,
     SWEEP_SEQUENCE,
@@ -55,7 +56,7 @@ def tracking_movement(
     if math.hypot(raw_error_x, raw_error_y) <= DEADZONE_PX:
         return ServoMovement(
             pan_absolute=round(last_pan_abs, 2),
-            tilt_absolute=round(last_tilt_abs, 2),
+            tilt_absolute=0.0,   # V1: Tilt locked to 0.0
             skip=True,
         )
 
@@ -75,11 +76,12 @@ def tracking_movement(
     error_y = predicted_cy - img_cy
 
     # ── Layer 3: Absolute target ──────────────────────────────────────────────
-    pan_correction  = _clamp(error_x * PAN_GAIN,  -MAX_PAN_DELTA,  MAX_PAN_DELTA)
-    tilt_correction = _clamp(error_y * TILT_GAIN, -MAX_TILT_DELTA, MAX_TILT_DELTA)
+    dir_multiplier = -1.0 if PAN_INVERT else 1.0
+    pan_correction  = _clamp(error_x * PAN_GAIN * dir_multiplier,  -MAX_PAN_DELTA,  MAX_PAN_DELTA)
+    tilt_correction = 0.0  # V1: Tilt locked to 0.0
 
     pan_absolute  = _clamp(last_pan_abs  + pan_correction,  PAN_MIN,  PAN_MAX)
-    tilt_absolute = _clamp(last_tilt_abs + tilt_correction, TILT_MIN, TILT_MAX)
+    tilt_absolute = 0.0   # V1: Tilt locked to 0.0
 
     # ── Layer 4: Angular deadband ─────────────────────────────────────────────
     if abs(pan_absolute  - last_pan_abs)  < MIN_SERVO_DELTA_DEG:

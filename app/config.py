@@ -49,16 +49,17 @@ DEFAULT_IMAGE_HEIGHT = 480
 MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", str(500_000)))  # 500 KB hard cap
 
 # ── Servo math ────────────────────────────────────────────────────────────────
-PAN_GAIN  = float(os.getenv("PAN_GAIN",  "0.05"))
-TILT_GAIN = float(os.getenv("TILT_GAIN", "0.05"))
+PAN_GAIN   = float(os.getenv("PAN_GAIN",   "0.05"))
+PAN_INVERT = os.getenv("PAN_INVERT", "false").lower() in ("true", "1", "yes")
+TILT_GAIN  = float(os.getenv("TILT_GAIN",  "0.0"))   # V1: Tilt locked to 0.0
 
 MAX_PAN_DELTA  = float(os.getenv("MAX_PAN_DELTA",  "15.0"))
-MAX_TILT_DELTA = float(os.getenv("MAX_TILT_DELTA", "10.0"))
+MAX_TILT_DELTA = float(os.getenv("MAX_TILT_DELTA", "0.0"))
 
 PAN_MIN  = float(os.getenv("PAN_MIN",  "-90.0"))
 PAN_MAX  = float(os.getenv("PAN_MAX",   "90.0"))
-TILT_MIN = float(os.getenv("TILT_MIN", "-30.0"))
-TILT_MAX = float(os.getenv("TILT_MAX",  "30.0"))
+TILT_MIN = float(os.getenv("TILT_MIN",   "0.0"))   # V1: Tilt locked to 0.0
+TILT_MAX = float(os.getenv("TILT_MAX",   "0.0"))
 
 # Pixel deadzone: if animal centre is within this radius of image centre,
 # hold position and skip the servo write.
@@ -82,18 +83,18 @@ ACTION_DEBOUNCE_FRAMES = int(os.getenv("ACTION_DEBOUNCE_FRAMES", "10"))
 # ── Sweep sequence ────────────────────────────────────────────────────────────
 # (pan_absolute_deg, tilt_absolute_deg) waypoints visited when no animal is seen.
 SWEEP_SEQUENCE: list[tuple[float, float]] = [
-    (  0.0,  0.0),
-    ( 30.0,  0.0),
-    ( 60.0,  0.0),
-    ( 90.0,  0.0),
-    ( 60.0, 10.0),
-    ( 30.0, 10.0),
-    (  0.0, 10.0),
-    (-30.0, 10.0),
-    (-60.0, 10.0),
-    (-90.0, 10.0),
-    (-60.0,  0.0),
-    (-30.0,  0.0),
+    (  0.0, 0.0),
+    ( 30.0, 0.0),
+    ( 60.0, 0.0),
+    ( 90.0, 0.0),
+    ( 60.0, 0.0),
+    ( 30.0, 0.0),
+    (  0.0, 0.0),
+    (-30.0, 0.0),
+    (-60.0, 0.0),
+    (-90.0, 0.0),
+    (-60.0, 0.0),
+    (-30.0, 0.0),
 ]
 
 # ── JEV / OpenRouter (TypeSafe AI) ─────────────────────────────────────────────

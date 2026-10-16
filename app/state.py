@@ -125,6 +125,12 @@ class DeviceStore:
     def slot(self) -> FrameSlot:
         return self._slot
 
+    def reset(self) -> None:
+        """Reset all tracking, servo coordinates, and action states back to default (0, 0)."""
+        self._state = CameraState()
+        self._latest_servo = None
+        self._latest_action = None
+
     # ── State mutations ───────────────────────────────────────────────────────
 
     def update_detected(
