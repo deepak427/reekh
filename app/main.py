@@ -770,18 +770,18 @@ async def monitor_stream():
 @app.get("/simulator", response_class=HTMLResponse)
 def simulator_ui():
     """Serves the 3D Agricultural Surveillance Simulator & State Inspector."""
-    sim_path = Path(__file__).resolve().parent.parent / "simulator.html"
-    if sim_path.exists():
-        return HTMLResponse(content=sim_path.read_text(encoding="utf-8"))
+    for p in [Path(__file__).resolve().parent / "simulator.html", Path(__file__).resolve().parent.parent / "simulator.html"]:
+        if p.exists():
+            return HTMLResponse(content=p.read_text(encoding="utf-8"))
     raise HTTPException(status_code=404, detail="simulator.html not found")
 
 
 @app.get("/monitor", response_class=HTMLResponse)
 def monitor_ui():
     """Live dashboard — Warm Agricultural Modern telemetry console for ESP32-CAM and RF-DETR inference."""
-    mon_path = Path(__file__).resolve().parent.parent / "monitor.html"
-    if mon_path.exists():
-        return HTMLResponse(content=mon_path.read_text(encoding="utf-8"))
+    for p in [Path(__file__).resolve().parent / "monitor.html", Path(__file__).resolve().parent.parent / "monitor.html"]:
+        if p.exists():
+            return HTMLResponse(content=p.read_text(encoding="utf-8"))
     raise HTTPException(status_code=404, detail="monitor.html not found")
 
 
