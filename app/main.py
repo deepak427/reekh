@@ -616,6 +616,8 @@ async def _process_frame(frame: FrameData) -> None:
         "detected":     detection_out is not None,
         "class_name":   detection_out.class_name if detection_out else None,
         "confidence":   detection_out.confidence if detection_out else None,
+        "bbox":         detection_out.bbox if detection_out else None,
+        "bbox_center":  detection_out.bbox_center if detection_out else None,
         "phase":        phase.value,
         "action":       action.value,
         "pan":          round(movement.pan_absolute, 2),
@@ -763,237 +765,24 @@ async def monitor_stream():
     )
 
 
-# ── Monitor dashboard ─────────────────────────────────────────────────────────
+# ── Monitor & Simulator UI ───────────────────────────────────────────────────
+
+@app.get("/simulator", response_class=HTMLResponse)
+def simulator_ui():
+    """Serves the 3D Agricultural Surveillance Simulator & State Inspector."""
+    sim_path = Path(__file__).resolve().parent.parent / "simulator.html"
+    if sim_path.exists():
+        return HTMLResponse(content=sim_path.read_text(encoding="utf-8"))
+    raise HTTPException(status_code=404, detail="simulator.html not found")
+
 
 @app.get("/monitor", response_class=HTMLResponse)
 def monitor_ui():
-    """Live dashboard — shows ESP32 status log + latest frame thumbnail.
-    Opens SSE connection automatically, no page refresh needed.
-    """
-    html = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<title>Wildlife Camera Monitor</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0d0d;color:#ddd;font-family:monospace;font-size:13px;
-     display:flex;flex-direction:column;height:100vh;overflow:hidden}
-header{padding:10px 14px;background:#111;border-bottom:1px solid #222;
-       display:flex;align-items:center;gap:12px}
-header h1{font-size:1em;color:#7cf;white-space:nowrap}
-#conn{font-size:0.75em;padding:2px 8px;border-radius:10px;background:#333;color:#888}
-#conn.ok{background:#1a3a1a;color:#4d4}
-#conn.err{background:#3a1a1a;color:#d44}
-main{display:flex;flex:1;overflow:hidden}
-#log-col{flex:1;display:flex;flex-direction:column;border-right:1px solid #222}
-#log-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;
-            font-size:0.75em;color:#666;display:flex;justify-content:space-between}
-#log{flex:1;overflow-y:auto;padding:6px 10px}
-.entry{padding:3px 0;border-bottom:1px solid #181818;display:flex;gap:8px;align-items:baseline}
-.entry .t{color:#555;white-space:nowrap;flex-shrink:0}
-.entry .tag{padding:1px 5px;border-radius:3px;font-size:0.7em;white-space:nowrap;flex-shrink:0}
-.tag.frame {background:#1a2a3a;color:#7af}
-.tag.status{background:#2a1a2a;color:#b7f}
-.tag.idle  {background:#1e1e1e;color:#666}
-.tag.active{background:#1a2e1a;color:#4c4}
-.tag.boot  {background:#2a2a1a;color:#cc4}
-.tag.error {background:#2e1a1a;color:#d44}
-.entry .msg{color:#aaa;word-break:break-all}
-.entry .badges{display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0}
-.b{background:#1e1e1e;border:1px solid #333;border-radius:2px;padding:1px 4px;font-size:0.7em;color:#888}
-#frame-col{width:190px;display:flex;flex-direction:column;flex-shrink:0}
-#frame-header{padding:6px 10px;background:#111;border-bottom:1px solid #222;font-size:0.75em;color:#666}
-#frame-wrap{padding:10px;display:flex;flex-direction:column;gap:6px}
-#thumb{width:100%;border-radius:4px;border:1px solid #444;display:block;cursor:pointer;transition:opacity .15s}
-#thumb:hover{opacity:.8}
-#frame-meta{font-size:0.7em;color:#555;line-height:1.7}
-#no-frame{color:#444;font-size:0.8em;text-align:center;margin-top:20px}
-/* Modal */
-#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);
-       z-index:100;align-items:center;justify-content:center;cursor:zoom-out}
-#modal.show{display:flex}
-#modal img{max-width:95vw;max-height:95vh;border-radius:6px;border:1px solid #444;
-           box-shadow:0 0 40px #000}
-#modal-info{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);
-            background:rgba(0,0,0,.7);color:#aaa;font-size:0.75em;padding:4px 12px;
-            border-radius:10px;pointer-events:none}
-</style>
-</head>
-<body>
-<header>
-  <h1>📡 Wildlife Camera Monitor</h1>
-  <span id="conn">connecting…</span>
-  <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-    <button id="btn-pir"
-      style="background:#1a3a1a;color:#4d4;border:1px solid #2a5a2a;border-radius:4px;
-             padding:4px 12px;font-family:monospace;font-size:0.8em;cursor:pointer">
-      ▶ Simulate PIR
-    </button>
-    <button id="btn-idle"
-      style="background:#2a2a1a;color:#aa4;border:1px solid #4a4a2a;border-radius:4px;
-             padding:4px 12px;font-family:monospace;font-size:0.8em;cursor:pointer">
-      ⏹ Force IDLE
-    </button>
-    <span id="sim-msg" style="font-size:0.75em;color:#555"></span>
-  </div>
-</header>
-<main>
-  <div id="log-col">
-    <div id="log-header">
-      <span>Event log</span>
-      <span id="count">0 events</span>
-    </div>
-    <div id="log"></div>
-  </div>
-  <div id="frame-col">
-    <div id="frame-header">Latest frame — click to enlarge</div>
-    <div id="frame-wrap">
-      <div id="no-frame">No frame yet</div>
-      <img id="thumb" style="display:none" alt="latest frame"/>
-      <div id="frame-meta"></div>
-      <div id="infer-result"
-           style="display:none;margin-top:6px;padding:6px;background:#111;
-                  border:1px solid #222;border-radius:3px;font-size:0.7em;
-                  color:#888;line-height:1.8">
-      </div>
-    </div>
-  </div>
-</main>
-<!-- Full-size modal -->
-<div id="modal">
-  <img id="modal-img" alt="full frame"/>
-  <div id="modal-info"></div>
-</div>
-<script>
-const log      = document.getElementById('log');
-const conn     = document.getElementById('conn');
-const countEl  = document.getElementById('count');
-const thumb    = document.getElementById('thumb');
-const noFrame  = document.getElementById('no-frame');
-const frameMeta= document.getElementById('frame-meta');
-const modal    = document.getElementById('modal');
-const modalImg = document.getElementById('modal-img');
-const modalInfo= document.getElementById('modal-info');
-let eventCount = 0;
-const MAX_ROWS = 200;
-let lastFull   = null;   // stores latest full-res b64
-
-function ts(iso){ return iso.slice(11,23); }
-
-function addRow(html){
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  log.prepend(div);
-  eventCount++;
-  countEl.textContent = eventCount + ' events';
-  while(log.children.length > MAX_ROWS) log.removeChild(log.lastChild);
-}
-
-function badges(...pairs){
-  return pairs.map(([k,v])=>`<span class="b">${k}&nbsp;${v}</span>`).join('');
-}
-
-// Open modal on thumbnail click
-thumb.addEventListener('click', () => {
-  if(!lastFull) return;
-  modalImg.src = 'data:image/jpeg;base64,' + lastFull.b64;
-  modalInfo.textContent = `seq ${lastFull.seq}  •  ${ts(lastFull.ts)}  •  ${(lastFull.bytes/1024).toFixed(1)} KB`;
-  modal.classList.add('show');
-});
-modal.addEventListener('click', () => modal.classList.remove('show'));
-document.addEventListener('keydown', e => { if(e.key==='Escape') modal.classList.remove('show'); });
-
-const es = new EventSource('/monitor/stream');
-
-es.onopen = () => { conn.textContent='connected'; conn.className='ok'; };
-es.onerror = () => { conn.textContent='disconnected — retrying'; conn.className='err'; };
-
-es.onmessage = (e) => {
-  let d;
-  try { d = JSON.parse(e.data); } catch { return; }
-
-  if(d.type === 'frame'){
-    // Store full res for modal
-    if(d.full) lastFull = {b64: d.full, seq: d.seq, ts: d.ts, bytes: d.bytes};
-
-    // Update sidebar thumbnail
-    thumb.src = 'data:image/jpeg;base64,' + d.thumb;
-    thumb.style.display = 'block';
-    noFrame.style.display = 'none';
-    frameMeta.innerHTML =
-      `<div>${ts(d.ts)}</div><div>seq&nbsp;${d.seq}</div>` +
-      `<div>${(d.bytes/1024).toFixed(1)}&nbsp;KB</div><div>${d.camera_id}</div>`;
-
-    // If modal is open, update it live too
-    if(modal.classList.contains('show') && d.full){
-      modalImg.src = 'data:image/jpeg;base64,' + d.full;
-      modalInfo.textContent = `seq ${d.seq}  •  ${ts(d.ts)}  •  ${(d.bytes/1024).toFixed(1)} KB`;
-    }
-
-    addRow(`<div class="entry">
-      <span class="t">${ts(d.ts)}</span>
-      <span class="tag frame">FRAME</span>
-      <span class="msg">#${d.seq}</span>
-      <span class="badges">${badges(['cam',d.camera_id],['sz',(d.bytes/1024).toFixed(1)+'KB'])}</span>
-    </div>`);
-
-  } else if(d.type === 'status'){
-    const sc = (d.state||'').toLowerCase();
-    const uptime = d.uptime_ms ? Math.floor(d.uptime_ms/1000)+'s' : '—';
-    const rssi   = d.wifi_rssi ? d.wifi_rssi+'dBm' : '—';
-    const heap   = d.free_heap ? Math.floor(d.free_heap/1024)+'KB' : '—';
-    addRow(`<div class="entry">
-      <span class="t">${ts(d.ts)}</span>
-      <span class="tag ${sc}">${d.state}</span>
-      <span class="msg">${d.message||''}</span>
-      <span class="badges">${badges(['up',uptime],['rssi',rssi],['heap',heap])}</span>
-    </div>`);
-  } else if(d.type === 'inference'){
-    // Inference result — update sidebar panel
-    const inferEl = document.getElementById('infer-result');
-    inferEl.style.display = 'block';
-    const det = d.detected ? `<span style="color:#4d4">✓ ${d.class_name} (${(d.confidence*100).toFixed(1)}%)</span>`
-                           : `<span style="color:#666">no detection</span>`;
-    inferEl.innerHTML =
-      `<div>${det}</div>` +
-      `<div>phase: <span style="color:#7af">${d.phase||'—'}</span></div>` +
-      `<div>action: <span style="color:#fa4">${d.action||'none'}</span></div>` +
-      `<div>pan: ${(d.pan||0).toFixed(1)}°  tilt: ${(d.tilt||0).toFixed(1)}°</div>` +
-      `<div style="color:#444">infer ${d.inference_ms||0}ms  total ${d.total_ms||0}ms</div>`;
-  }
-};
-
-// ── Simulate buttons ──────────────────────────────────────────────────────────
-const simMsg = document.getElementById('sim-msg');
-
-document.getElementById('btn-pir').addEventListener('click', async () => {
-  simMsg.textContent = 'sending…';
-  try {
-    const r = await fetch('/simulate-pir', {method:'POST'});
-    const j = await r.json();
-    simMsg.textContent = j.message || j.status;
-    setTimeout(() => { simMsg.textContent = ''; }, 3000);
-  } catch(e) {
-    simMsg.textContent = 'error';
-  }
-});
-
-document.getElementById('btn-idle').addEventListener('click', async () => {
-  simMsg.textContent = 'sending…';
-  try {
-    const r = await fetch('/simulate-idle', {method:'POST'});
-    const j = await r.json();
-    simMsg.textContent = j.message || j.status;
-    setTimeout(() => { simMsg.textContent = ''; }, 3000);
-  } catch(e) {
-    simMsg.textContent = 'error';
-  }
-});
-</script>
-</body>
-</html>"""
-    return HTMLResponse(content=html)
+    """Live dashboard — Warm Agricultural Modern telemetry console for ESP32-CAM and RF-DETR inference."""
+    mon_path = Path(__file__).resolve().parent.parent / "monitor.html"
+    if mon_path.exists():
+        return HTMLResponse(content=mon_path.read_text(encoding="utf-8"))
+    raise HTTPException(status_code=404, detail="monitor.html not found")
 
 
 # ── Log query endpoints ───────────────────────────────────────────────────────
