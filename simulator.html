@@ -496,10 +496,11 @@ pre.state-box {
       <div class="card">
         <div class="card-head">Timeline Progression Guide</div>
         <div style="font-size:11px; line-height:1.5; color:var(--text-muted);">
-          • <strong>t = 0.0s to 1.0s:</strong> Animal is outside PIR zone ($d > 8\text{m}$). Camera &amp; light are <strong>OFF (Sleep)</strong>.<br/>
-          • <strong>t = 1.1s:</strong> Animal crosses into PIR zone ($d = 7.7\text{m} \le 8\text{m}$) &rarr; Light switches <strong>ON</strong> &rarr; Camera wakes up!<br/>
-          • <strong>t = 1.2s to 4.5s:</strong> Camera streams frames &rarr; Backend runs 3-layer servo math &rarr; Gimbal follows animal.<br/>
-          • <strong>t &ge; 4.5s:</strong> Deterrent sound fires &rarr; Animal flees crop area.
+          • <strong>t = 0.0s to 1.0s:</strong> Animal is outside PIR zone ($d > 8\text{m}$). Camera is <strong>IDLE (Sleep)</strong>. Spotlight is <strong>OFF</strong>.<br/>
+          • <strong>t = 1.1s:</strong> Animal crosses PIR boundary ($d = 7.7\text{m} \le 8\text{m}$) &rarr; PIR interrupt fires &rarr; Camera wakes &amp; streams. Spotlight stays <strong>OFF</strong> until a deterrent action fires.<br/>
+          • <strong>t = 1.2s to 4.5s:</strong> Camera streams frames &rarr; Backend runs 3-layer servo math &rarr; Pan servo tracks animal. Tilt is <strong>fixed at 0° (V1 hardware)</strong>.<br/>
+          • <strong>t &ge; 4.5s:</strong> Backend sends <code>FLASH_LIGHT</code> or <code>BARK_SOUND</code> action &rarr; Relay fires spotlight for <strong>500 ms</strong>, then cuts off &rarr; Animal flees.<br/>
+          • <strong>30s IDLE timeout:</strong> If PIR sees no motion for 30 continuous seconds, firmware transitions to <strong>IDLE</strong> &rarr; pan centers to 0° &rarr; backend state resets. (Timeline shows countdown badge when active.)
         </div>
       </div>
 
@@ -508,14 +509,14 @@ pre.state-box {
         <div class="card-head">Gimbal &amp; Actuators</div>
         <div class="meter-row">
           <span class="mk">Pan Servo (GPIO 12)</span>
-          <span class="mv">0.0&deg; to 180.0&deg; (90&deg; Center)</span>
+          <span class="mv">&minus;90.0&deg; to +90.0&deg; (0&deg; Center)</span>
         </div>
         <div class="meter-row">
           <span class="mk">Tilt Servo (GPIO 14)</span>
-          <span class="mv">0.0&deg; to 180.0&deg; (90&deg; Level)</span>
+          <span class="mv" style="color:var(--text-muted);">Fixed 0.0&deg; — V1 Pan-Only Mode</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Slew Rate Limit</span>
+          <span class="mk">Pan Slew Rate</span>
           <span class="mv orange">280.0&deg;/sec</span>
         </div>
         <div class="meter-row">
@@ -525,6 +526,10 @@ pre.state-box {
         <div class="meter-row">
           <span class="mk">12V Spotlight Relay (GPIO 15)</span>
           <span class="mv" id="relay-status">OPEN (STANDBY)</span>
+        </div>
+        <div class="meter-row" style="align-items:flex-start; padding-top:5px; padding-bottom:5px;">
+          <span class="mk" style="padding-top:2px;">Relay Behaviour</span>
+          <span class="mv" style="font-size:10px; color:var(--text-muted); text-align:right; line-height:1.4;">Pulses 500 ms on<br/>FLASH_LIGHT action only</span>
         </div>
         <div class="meter-row">
           <span class="mk">DFPlayer Audio (GPIO 16/17)</span>
@@ -668,7 +673,7 @@ pre.state-box {
         </div>
         <div class="meter-row">
           <span class="mk">Tilt Angle At Capture</span>
-          <span class="mv blue" id="pkt-tilt">0.00°</span>
+          <span class="mv" style="color:var(--text-muted);" id="pkt-tilt">0.00° (fixed — V1)</span>
         </div>
         <div class="meter-row">
           <span class="mk">PIR Hardware Trigger</span>
@@ -697,27 +702,27 @@ pre.state-box {
         </div>
         <div class="meter-row">
           <span class="mk">Layer 3: Absolute Target</span>
-          <span class="mv orange" id="math-l3">Pan: 0.0°, Tilt: 0.0°</span>
+          <span class="mv orange" id="math-l3">Pan: 0.0° (Tilt fixed 0°)</span>
         </div>
       </div>
 
-      <!-- 4. Physical Motor Slew Lag -->
+      <!-- 4. Physical Motor Kinematics (Pan-Only) -->
       <div class="card">
-        <div class="card-head">⚙️ Physical Motor Kinematics</div>
+        <div class="card-head">⚙️ Pan Servo Kinematics (V1 Pan-Only)</div>
         <div class="meter-row">
           <span class="mk">Physical Pan Angle</span>
           <span class="mv blue" id="act-pan">0.00°</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Physical Tilt Angle</span>
-          <span class="mv blue" id="act-tilt">0.00°</span>
+          <span class="mk">Tilt Angle</span>
+          <span class="mv" style="color:var(--text-muted);" id="act-tilt">0.00° (fixed)</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Remaining Slew Lag</span>
+          <span class="mk">Pan Slew Remaining</span>
           <span class="mv" id="act-lag">0.00°</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Motor Slew Status</span>
+          <span class="mk">Pan Motor Status</span>
           <span class="mv green" id="act-status">HOLDING</span>
         </div>
       </div>
@@ -825,16 +830,22 @@ const Sim = {
   frameIndex: 0,
 
   // Hardware State: PIR Motion Sensor
+  // Mirrors firmware: lastPirTriggerMs + PIR_IDLE_TIMEOUT_MS (30s)
   pirDetected: false,
-  systemActive: false, // true when light is ON and camera is streaming
-  activeHoldTimer: 0.0,
+  systemActive: false,        // true while camera is streaming (ACTIVE state)
+  lastPirTriggerTime: -1,     // sim-clock seconds of last PIR trigger (-1 = never)
+  PIR_IDLE_TIMEOUT: 30.0,     // matches firmware PIR_IDLE_TIMEOUT_MS = 30000
 
   // Physical Servos: Commanded Target vs Current Physical Angle (degrees)
+  // V1 hardware: Pan-only. Tilt servo is wired but firmware locks it at 0°.
   currentPan: 0.0,
-  currentTilt: 0.0,
+  currentTilt: 0.0,   // always 0 — kept for compatibility with backend math
   targetPan: 0.0,
-  targetTilt: 0.0,
+  targetTilt: 0.0,    // always 0 — backend still sends it, firmware ignores it
   slewRate: 280.0, // deg/sec physical servo speed
+
+  // Spotlight pulse state (relay fires for 500ms on FLASH_LIGHT, not persistent)
+  spotlightPulseEndTime: -1,  // sim-clock time when pulse expires (-1 = off)
 
   // Wildlife Target
   species: 'Leopard',
@@ -1269,44 +1280,95 @@ async function executeSimulationStep(targetTime, dt) {
   }
 
   // 2. Evaluate PIR Motion Sensor (at post x=0, z=0, looking -Z)
+  //    Mirrors firmware pirTask: trigger refreshes lastPirTriggerMs while pin HIGH;
+  //    30s without a refresh → STATE_IDLE, pan centers, backend state resets.
   const dist = Math.hypot(Sim.animalPos.x, Sim.animalPos.z);
   const angleDeg = Math.abs(THREE.MathUtils.radToDeg(Math.atan2(Sim.animalPos.x, -Sim.animalPos.z)));
   const inPIR = dist <= 8.0 && angleDeg <= 50.0 && Sim.animalPos.z < -1.5;
   Sim.pirDetected = inPIR;
 
-  // Real Hardware Lifecycle:
   if (inPIR) {
-    Sim.systemActive = true;
-    Sim.activeHoldTimer = 6.0;
+    // PIR pin HIGH — refresh trigger timestamp (mirrors lastPirTriggerMs = millis())
+    Sim.lastPirTriggerTime = Sim.currentTime;
+
+    if (!Sim.systemActive) {
+      // Rising edge: IDLE → ACTIVE (mirrors pirTask waking cameraTask)
+      Sim.systemActive = true;
+    }
+
     pirLedMat.color.setHex(0xc94a44);
     document.getElementById('pir-hud-badge').className = 'pir-badge triggered';
-    document.getElementById('pir-hud-badge').innerHTML = `<span>Motion Triggered (${dist.toFixed(1)}m)</span>`;
+    document.getElementById('pir-hud-badge').innerHTML =
+      `<span>PIR Active · Motion (${dist.toFixed(1)}m)</span>`;
     document.getElementById('pkt-pir').textContent = `TRIGGERED (${dist.toFixed(1)}m)`;
     document.getElementById('pkt-pir').className = 'mv red';
   } else {
     pirLedMat.color.setHex(0x4e8a56);
-    document.getElementById('pir-hud-badge').className = 'pir-badge';
-    document.getElementById('pir-hud-badge').innerHTML = `<span>PIR Standby (${dist.toFixed(1)}m)</span>`;
-    document.getElementById('pkt-pir').textContent = `CLEAR (${dist.toFixed(1)}m)`;
-    document.getElementById('pkt-pir').className = 'mv green';
 
-    if (Sim.systemActive) {
-      Sim.activeHoldTimer -= dt;
-      if (Sim.activeHoldTimer <= 0) Sim.systemActive = false;
+    if (Sim.systemActive && Sim.lastPirTriggerTime >= 0) {
+      // No motion — check 30s timeout (mirrors pirTask elapsed >= PIR_IDLE_TIMEOUT_MS)
+      const elapsed = Sim.currentTime - Sim.lastPirTriggerTime;
+      const remaining = Math.max(0, Sim.PIR_IDLE_TIMEOUT - elapsed);
+
+      if (elapsed >= Sim.PIR_IDLE_TIMEOUT) {
+        // Timeout → IDLE: mirrors firmware sending reset + centering pan
+        Sim.systemActive = false;
+        Sim.lastPirTriggerTime = -1;
+        Sim.targetPan = 0.0;   // firmware centers pan on IDLE
+        Sim.spotlightPulseEndTime = -1;
+        dirSpotlight.intensity = 0.0;
+
+        // Mirror firmware: send reset message → store.reset() on backend
+        Sim.cameraState.phase = 'sweeping';
+        Sim.cameraState.frames_without_detection = 0;
+        Sim.cameraState.active_action = 'none';
+        Sim.cameraState.action_frames_remaining = 0;
+        Sim.cameraState.sweep_step = 0;
+        Sim.cameraState.prev_bbox_center = null;
+        Sim.cameraState.last_pan_absolute = 0.0;
+        Sim.cameraState.last_tilt_absolute = 0.0;
+        updateCameraStateUI();
+
+        const relayEl = document.getElementById('relay-status');
+        if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
+
+        document.getElementById('pir-hud-badge').className = 'pir-badge';
+        document.getElementById('pir-hud-badge').innerHTML =
+          `<span>PIR Timeout → IDLE (30s · Pan centered)</span>`;
+        document.getElementById('pkt-pir').textContent = 'CLEAR (Timeout)';
+        document.getElementById('pkt-pir').className = 'mv';
+      } else {
+        // Still within timeout window — show countdown
+        document.getElementById('pir-hud-badge').className = 'pir-badge';
+        document.getElementById('pir-hud-badge').innerHTML =
+          `<span>PIR Clear · IDLE in ${remaining.toFixed(0)}s</span>`;
+        document.getElementById('pkt-pir').textContent =
+          `CLEAR (timeout in ${remaining.toFixed(0)}s)`;
+        document.getElementById('pkt-pir').className = 'mv';
+      }
+    } else {
+      // Already IDLE or never triggered
+      document.getElementById('pir-hud-badge').className = 'pir-badge';
+      document.getElementById('pir-hud-badge').innerHTML =
+        `<span>PIR Standby · Camera Sleeping (${dist.toFixed(1)}m)</span>`;
+      document.getElementById('pkt-pir').textContent = `CLEAR (${dist.toFixed(1)}m)`;
+      document.getElementById('pkt-pir').className = 'mv';
     }
   }
 
-  // 3. Update Directional Spotlight & Camera Power
-  // Clean natural spotlight intensity: 2.2 (when active), 0 (when sleep)
+  // 3. Camera power (PIR-driven) and relay/spotlight state (action-driven, not PIR-driven)
   const relayEl = document.getElementById('relay-status');
+
   if (Sim.systemActive) {
-    Sim.directionalLightOn = true;
     Sim.cameraActive = true;
-    dirSpotlight.intensity = 2.2;
+
+    // Relay/spotlight: only ON during a FLASH_LIGHT pulse window
+    const spotOn = Sim.spotlightPulseEndTime >= 0 && Sim.currentTime <= Sim.spotlightPulseEndTime;
+    dirSpotlight.intensity = spotOn ? 2.2 : 0.0;
 
     if (relayEl) {
-      relayEl.textContent = 'CLOSED (12V ON)';
-      relayEl.className = 'mv orange';
+      relayEl.textContent = spotOn ? 'CLOSED (12V ON · Flash)' : 'OPEN (Waiting for Action)';
+      relayEl.className = spotOn ? 'mv orange' : 'mv';
     }
 
     document.getElementById('pkt-status').textContent = 'TRANSMITTING (15 FPS)';
@@ -1316,7 +1378,6 @@ async function executeSimulationStep(targetTime, dt) {
     document.getElementById('cam-fps-pill').textContent = '15 FPS';
     document.getElementById('cam-fps-pill').className = 'pill active';
   } else {
-    Sim.directionalLightOn = false;
     Sim.cameraActive = false;
     dirSpotlight.intensity = 0.0;
 
@@ -1333,7 +1394,8 @@ async function executeSimulationStep(targetTime, dt) {
     document.getElementById('cam-fps-pill').className = 'pill';
   }
 
-  // 4. Update Physical Servos: Smooth Slew towards Commanded Target
+  // 4. Update Physical Pan Servo: smooth slew towards commanded target.
+  // Tilt is V1 hardware-locked at 0° — firmware never writes to tilt PWM.
   const effectiveDt = Math.max(0.05, Math.min(0.2, dt));
   const maxStep = Sim.slewRate * effectiveDt;
 
@@ -1341,27 +1403,27 @@ async function executeSimulationStep(targetTime, dt) {
   if (Math.abs(panDiff) <= maxStep) Sim.currentPan = Sim.targetPan;
   else Sim.currentPan += Math.sign(panDiff) * maxStep;
 
-  const tiltDiff = Sim.targetTilt - Sim.currentTilt;
-  if (Math.abs(tiltDiff) <= maxStep) Sim.currentTilt = Sim.targetTilt;
-  else Sim.currentTilt += Math.sign(tiltDiff) * maxStep;
+  // Tilt always 0 in V1
+  Sim.currentTilt = 0.0;
+  Sim.targetTilt  = 0.0;
 
-  // Apply to physical 3D gimbal hierarchy (negative X tilt points downward towards ground)
+  // Apply to 3D gimbal: only pan rotates; tilt head is stationary
   panTurret.rotation.y = THREE.MathUtils.degToRad(-Sim.currentPan);
-  tiltHead.rotation.x = THREE.MathUtils.degToRad(-Sim.currentTilt);
+  tiltHead.rotation.x  = 0;  // V1: tilt servo locked at 0°
 
   // Update Outgoing Packet telemetry
-  document.getElementById('pkt-pan').textContent = Sim.currentPan.toFixed(2) + '°';
-  document.getElementById('pkt-tilt').textContent = Sim.currentTilt.toFixed(2) + '°';
+  document.getElementById('pkt-pan').textContent  = Sim.currentPan.toFixed(2) + '°';
+  document.getElementById('pkt-tilt').textContent = '0.00° (fixed — V1)';
 
-  // Kinematics Slew Lag
-  const remainingLag = Math.hypot(Sim.targetPan - Sim.currentPan, Sim.targetTilt - Sim.currentTilt);
-  document.getElementById('act-pan').textContent = Sim.currentPan.toFixed(2) + '°';
-  document.getElementById('act-tilt').textContent = Sim.currentTilt.toFixed(2) + '°';
-  document.getElementById('act-lag').textContent = remainingLag.toFixed(2) + '°';
+  // Kinematics panel — pan slew only
+  const remainingLag = Math.abs(Sim.targetPan - Sim.currentPan);
+  document.getElementById('act-pan').textContent  = Sim.currentPan.toFixed(2) + '°';
+  document.getElementById('act-tilt').textContent = '0.00° (fixed)';
+  document.getElementById('act-lag').textContent  = remainingLag.toFixed(2) + '°';
 
   const isMoving = remainingLag > 0.2;
   document.getElementById('act-status').textContent = isMoving ? 'SLEWING TOWARDS TARGET' : 'AT TARGET (HOLDING)';
-  document.getElementById('act-status').className = 'mv ' + (isMoving ? 'orange' : 'green');
+  document.getElementById('act-status').className   = 'mv ' + (isMoving ? 'orange' : 'green');
 
   // 5. Render Sensor Frame directly using Hardware WebGL Renderer
   renderSensorFrame();
@@ -1583,15 +1645,15 @@ function runLocalBackendMath(capturePan, captureTilt) {
     cs.prev_bbox_center = [cx, cy];
     cs.prev_frame_ts = Sim.currentTime;
     cs.last_pan_absolute = targetPan;
-    cs.last_tilt_absolute = targetTilt;
+    cs.last_tilt_absolute = 0.0;  // V1: tilt always 0
 
-    Sim.targetPan = targetPan;
-    Sim.targetTilt = targetTilt;
+    Sim.targetPan  = targetPan;
+    Sim.targetTilt = 0.0;  // V1: tilt always 0
 
     applyBackendResult({
       phase: 'tracking',
       action: action,
-      movement: { pan_absolute: targetPan, tilt_absolute: targetTilt, skip: skip },
+      movement: { pan_absolute: targetPan, tilt_absolute: 0.0, skip: skip },
       detection: det,
       inference_ms: 88.5,
     });
@@ -1623,17 +1685,17 @@ function runLocalBackendMath(capturePan, captureTilt) {
       });
     } else {
       cs.phase = 'sweeping';
-      const sweepSeq = [[0,0],[30,0],[60,0],[90,0],[60,10],[30,10],[0,10],[-30,10],[-60,10],[-90,10],[-60,0],[-30,0]];
+      const sweepSeq = [[0],[30],[60],[90],[-30],[-60],[-90]];
       cs.sweep_step = (cs.sweep_step + 1) % sweepSeq.length;
       const sweepTarget = sweepSeq[cs.sweep_step];
 
-      Sim.targetPan = sweepTarget[0];
-      Sim.targetTilt = sweepTarget[1];
+      Sim.targetPan  = sweepTarget[0];
+      Sim.targetTilt = 0.0;  // V1: tilt always 0
 
       applyBackendResult({
         phase: 'sweeping',
         action: 'CONTINUE_SWEEP',
-        movement: { pan_absolute: sweepTarget[0], tilt_absolute: sweepTarget[1], skip: false },
+        movement: { pan_absolute: sweepTarget[0], tilt_absolute: 0.0, skip: false },
         detection: null,
         camera_state: {
           phase: 'sweeping',
@@ -1643,7 +1705,7 @@ function runLocalBackendMath(capturePan, captureTilt) {
           sweep_step: cs.sweep_step,
           prev_bbox_center: null,
           last_pan_absolute: sweepTarget[0],
-          last_tilt_absolute: sweepTarget[1],
+          last_tilt_absolute: 0.0,  // V1: tilt always 0
         },
         inference_ms: 72.0,
       });
@@ -1704,17 +1766,17 @@ function applyBackendResult(data) {
         ? `Inside Center Deadzone (${errHypot}px <= 20px)`
         : `Angular Deadband (Δ < 1.5° · Hold)`;
       document.getElementById('math-l1').className = 'mv green';
-      document.getElementById('math-l3').textContent = `Hold: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
+      document.getElementById('math-l3').textContent = `Hold: Pan ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
     } else {
       document.getElementById('math-l1').textContent = `Outside Deadzone (${errHypot}px > 20px)`;
       document.getElementById('math-l1').className = 'mv orange';
-      document.getElementById('math-l3').textContent = `Pan: ${data.movement.pan_absolute.toFixed(1)}°, Tilt: ${data.movement.tilt_absolute.toFixed(1)}°`;
+      document.getElementById('math-l3').textContent = `Pan: ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
     }
-    document.getElementById('math-l2').textContent = `Err: ${errX}px, ${errY}px`;
+    document.getElementById('math-l2').textContent = `Err: ${errX}px, ΔY: ${errY}px`;
 
     if (!data.movement.skip) {
-      Sim.targetPan = data.movement.pan_absolute;
-      Sim.targetTilt = data.movement.tilt_absolute;
+      Sim.targetPan  = data.movement.pan_absolute;
+      Sim.targetTilt = 0.0;  // V1: always ignore tilt from backend
     }
   } else {
     document.getElementById('det-cls').textContent = 'None';
@@ -1726,10 +1788,10 @@ function applyBackendResult(data) {
       document.getElementById('math-l1').textContent = `Holding Target (${fnd}/5 dropped)`;
       document.getElementById('math-l1').className = 'mv green';
       document.getElementById('math-l2').textContent = 'Hysteresis / Re-acquiring';
-      document.getElementById('math-l3').textContent = `Hold: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
+      document.getElementById('math-l3').textContent = `Hold: Pan ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
       if (!data.movement.skip) {
-        Sim.targetPan = data.movement.pan_absolute;
-        Sim.targetTilt = data.movement.tilt_absolute;
+        Sim.targetPan  = data.movement.pan_absolute;
+        Sim.targetTilt = 0.0;  // V1: tilt locked at 0
       }
     } else {
       document.getElementById('cam-optical-state').textContent = 'SWEEPING PERIMETER';
@@ -1737,9 +1799,9 @@ function applyBackendResult(data) {
       document.getElementById('math-l1').textContent = 'No Detection → Sweep';
       document.getElementById('math-l1').className = 'mv';
       document.getElementById('math-l2').textContent = '—';
-      document.getElementById('math-l3').textContent = `Sweep: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
-      Sim.targetPan = data.movement.pan_absolute;
-      Sim.targetTilt = data.movement.tilt_absolute;
+      document.getElementById('math-l3').textContent = `Sweep: Pan ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
+      Sim.targetPan  = data.movement.pan_absolute;
+      Sim.targetTilt = 0.0;  // V1: tilt locked at 0
     }
   }
 
@@ -1871,12 +1933,26 @@ function renderSensorFrame() {
 }
 
 function triggerStrobeFlash(intensity = 1.0) {
+  // Screen flash effect
   document.getElementById('screen-strobe').classList.add('active');
-  dirSpotlight.intensity = 3.5 * intensity;
-  setTimeout(() => {
-    document.getElementById('screen-strobe').classList.remove('active');
-    dirSpotlight.intensity = Sim.directionalLightOn ? 2.2 : 0.0;
-  }, 140);
+  // For FLASH_LIGHT: also pulse the 3D spotlight for 500ms to match relay behaviour
+  const isSpotPulse = intensity >= 1.0;
+  if (isSpotPulse) {
+    const relayEl = document.getElementById('relay-status');
+    dirSpotlight.intensity = 3.2;
+    if (relayEl) { relayEl.textContent = 'CLOSED (12V ON · Flash)'; relayEl.className = 'mv orange'; }
+    // Register the sim-clock window so executeSimulationStep can track it
+    Sim.spotlightPulseEndTime = Sim.currentTime + 0.5;  // 500 ms relay pulse
+    setTimeout(() => {
+      dirSpotlight.intensity = 0.0;
+      if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
+    }, 500);
+  } else {
+    // BARK_SOUND — brief visual flash only, no relay
+    dirSpotlight.intensity = 1.2 * intensity;
+    setTimeout(() => { dirSpotlight.intensity = 0.0; }, 140);
+  }
+  setTimeout(() => { document.getElementById('screen-strobe').classList.remove('active'); }, 140);
 }
 
 // ── WebGL Main Render Loop ──────────────────────────────────────────────────
@@ -1933,6 +2009,12 @@ function resetTime() {
   Sim.currentTilt = 0;
   Sim.targetPan = 0;
   Sim.targetTilt = 0;
+  Sim.systemActive = false;
+  Sim.lastPirTriggerTime = -1;
+  Sim.spotlightPulseEndTime = -1;
+  dirSpotlight.intensity = 0.0;
+  const relayEl = document.getElementById('relay-status');
+  if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
   Sim.cameraState.phase = 'sweeping';
   Sim.cameraState.frames_without_detection = 0;
   Sim.cameraState.active_action = 'none';
