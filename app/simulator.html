@@ -546,14 +546,19 @@ pre.state-box {
           </div>
         </div>
         <div class="field">
+          <label>Camera ID</label>
+          <input type="text" id="cfg-cam-id" value="esp32-cam-01" />
+        </div>
+        <div class="field">
           <label>API Key</label>
           <input type="text" id="cfg-key" value="08af8f9128cdb5eb5bb045f19a41a558868be2ba0b0026c9cb5734406601b117" />
         </div>
         <div class="field">
           <label>Architecture Mode</label>
-          <select id="cfg-mode" style="width:100%; padding:6px; font-weight:700; border-radius:4px; border:1px solid var(--border-dark); background:var(--bg-main); font-size:14px;">
-            <option value="push_poll" selected>Push / Poll Decoupled (80ms Servo / 400ms Action)</option>
-            <option value="sync">Synchronous /infer (Direct Request-Response)</option>
+          <select id="cfg-mode" style="width:100%; padding:6px; font-weight:700; border-radius:4px; border:1px solid var(--border-dark); background:var(--bg-main); font-size:13px;">
+            <option value="ws" selected>WebSocket (Real Firmware Protocol · WS)</option>
+            <option value="push_poll">Push / Poll Decoupled (HTTP Fallback)</option>
+            <option value="sync">Synchronous /infer (Direct HTTP)</option>
           </select>
         </div>
       </div>
@@ -859,6 +864,8 @@ const Sim = {
   lastDetection: null,
   isInferring: false,
   backendOnline: false,
+  ws: null,
+  wsConnected: false,
 };
 
 // ── Three.js 3D Virtual Scene Setup ──────────────────────────────────────────
@@ -1185,22 +1192,163 @@ function updateAnimalBillboard() {
 }
 updateAnimalBillboard();
 
+// ── Helper: Active Camera ID ────────────────────────────────────────────────
+function getCameraId() {
+  const el = document.getElementById('cfg-cam-id');
+  return (el && el.value.trim()) || 'esp32-cam-01';
+}
+
+// ── WebSocket Protocol for ESP32-CAM Simulator ──────────────────────────────
+function sendWsReset() {
+  const camId = getCameraId();
+  if (Sim.ws && Sim.ws.readyState === WebSocket.OPEN) {
+    Sim.ws.send(JSON.stringify({ type: 'reset', camera_id: camId }));
+  } else if (Sim.backendOnline) {
+    const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+    fetch(`${url}/state/${camId}`, { method: 'DELETE' }).catch(() => {});
+  }
+}
+
+function sendWsStatus(state, message) {
+  const camId = getCameraId();
+  if (Sim.ws && Sim.ws.readyState === WebSocket.OPEN) {
+    Sim.ws.send(JSON.stringify({
+      type: 'status',
+      state: state,
+      message: message,
+      camera_id: camId,
+      uptime_ms: Math.round(Sim.currentTime * 1000),
+      wifi_rssi: -45,
+      free_heap: 245000,
+    }));
+  }
+}
+
+function connectWebSocket() {
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  if (mode !== 'ws') {
+    if (Sim.ws) {
+      try { Sim.ws.close(); } catch (_) {}
+      Sim.ws = null;
+      Sim.wsConnected = false;
+    }
+    return;
+  }
+
+  const urlInput = document.getElementById('cfg-url');
+  if (!urlInput || !urlInput.value) return;
+  const httpUrl = urlInput.value.trim().replace(/\/$/, '');
+  const apiKey = document.getElementById('cfg-key')?.value.trim() || '';
+  const camId = getCameraId();
+
+  let wsUrl = httpUrl.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
+  wsUrl += `/ws/${encodeURIComponent(camId)}?api_key=${encodeURIComponent(apiKey)}`;
+
+  if (Sim.ws && (Sim.ws.readyState === WebSocket.CONNECTING || Sim.ws.readyState === WebSocket.OPEN)) {
+    if (Sim.ws._targetUrl === wsUrl) return; // already connected to this URL
+    try { Sim.ws.close(); } catch (_) {}
+  }
+
+  try {
+    const ws = new WebSocket(wsUrl);
+    ws._targetUrl = wsUrl;
+    Sim.ws = ws;
+
+    ws.onopen = () => {
+      Sim.wsConnected = true;
+      const pill = document.getElementById('backend-status-pill');
+      if (pill) {
+        pill.textContent = `WS: Connected (${camId})`;
+        pill.className = 'pill active';
+      }
+      // 1. Send reset on WS open (matches real firmware)
+      sendWsReset();
+      // 2. Send status BOOT
+      sendWsStatus('BOOT', 'Simulator Connected');
+    };
+
+    ws.onmessage = (event) => {
+      if (typeof event.data !== 'string') return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ping') return; // backend keepalive
+
+        if (data.type === 'simulate_pir') {
+          // Monitor dashboard Simulate PIR button clicked!
+          Sim.systemActive = true;
+          Sim.activeHoldTimer = 6.0;
+          sendWsStatus('ACTIVE', 'Motion detected (Simulate PIR from monitor)');
+          return;
+        }
+
+        if (data.type === 'simulate_idle') {
+          // Monitor dashboard Simulate IDLE button clicked!
+          Sim.systemActive = false;
+          Sim.activeHoldTimer = 0;
+          sendWsStatus('IDLE', 'Forced IDLE from monitor');
+          sendWsReset();
+          Sim.targetPan = 0;
+          Sim.targetTilt = 0;
+          return;
+        }
+
+        // Inference result push from backend
+        if (data.pan !== undefined || data.movement !== undefined) {
+          applyBackendResult(data);
+        }
+      } catch (e) {
+        console.warn('WS message parse error', e);
+      }
+    };
+
+    ws.onclose = () => {
+      Sim.wsConnected = false;
+      const pill = document.getElementById('backend-status-pill');
+      if (pill && (!Sim.backendOnline || mode === 'ws')) {
+        pill.textContent = 'WS: Disconnected';
+        pill.className = 'pill';
+      }
+    };
+
+    ws.onerror = (e) => {
+      console.warn('WS error', e);
+    };
+  } catch (err) {
+    console.warn('WS connect failed', err);
+  }
+}
+
 // ── Check Backend Health ─────────────────────────────────────────────────────
 async function checkBackendHealth() {
   const inputEl = document.getElementById('cfg-url');
   if (!inputEl) return;
   const url = inputEl.value.trim().replace(/\/$/, '');
   const pill = document.getElementById('backend-status-pill');
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  const camId = getCameraId();
+
   if (!url) return;
   try {
     const res = await fetch(`${url}/health`, { method: 'GET', signal: AbortSignal.timeout(3500) });
     if (res.ok) {
       const data = await res.json();
       Sim.backendOnline = true;
-      pill.textContent = `Backend: Connected (${data.engine || 'online'})`;
-      pill.className = 'pill active';
+      if (mode === 'ws') {
+        connectWebSocket();
+        if (Sim.wsConnected) {
+          pill.textContent = `WS: Connected (${camId})`;
+          pill.className = 'pill active';
+        } else {
+          pill.textContent = `WS: Connecting... (${camId})`;
+          pill.className = 'pill';
+        }
+      } else {
+        pill.textContent = `HTTP: Connected (${data.engine || 'online'})`;
+        pill.className = 'pill active';
+      }
+
       try {
-        const sRes = await fetch(`${url}/state/cam-001`, { signal: AbortSignal.timeout(2000) });
+        const sRes = await fetch(`${url}/state/${encodeURIComponent(camId)}`, { signal: AbortSignal.timeout(2000) });
         if (sRes.ok) {
           const sData = await sRes.json();
           if (sData) {
@@ -1229,6 +1377,27 @@ if (urlInput) {
   urlInput.addEventListener('input', checkBackendHealth);
   urlInput.addEventListener('change', checkBackendHealth);
 }
+
+document.getElementById('cfg-mode')?.addEventListener('change', () => {
+  const mode = document.getElementById('cfg-mode')?.value;
+  if (mode === 'ws') connectWebSocket();
+  else if (Sim.ws) {
+    try { Sim.ws.close(); } catch (_) {}
+    Sim.ws = null;
+    Sim.wsConnected = false;
+  }
+  checkBackendHealth();
+});
+
+document.getElementById('cfg-cam-id')?.addEventListener('change', () => {
+  if (Sim.ws) {
+    try { Sim.ws.close(); } catch (_) {}
+    Sim.ws = null;
+    Sim.wsConnected = false;
+  }
+  checkBackendHealth();
+});
+
 checkBackendHealth();
 setInterval(checkBackendHealth, 3000);
 
@@ -1274,6 +1443,8 @@ async function executeSimulationStep(targetTime, dt) {
   const inPIR = dist <= 8.0 && angleDeg <= 50.0 && Sim.animalPos.z < -1.5;
   Sim.pirDetected = inPIR;
 
+  const wasActive = Sim.systemActive;
+
   // Real Hardware Lifecycle:
   if (inPIR) {
     Sim.systemActive = true;
@@ -1283,6 +1454,10 @@ async function executeSimulationStep(targetTime, dt) {
     document.getElementById('pir-hud-badge').innerHTML = `<span>Motion Triggered (${dist.toFixed(1)}m)</span>`;
     document.getElementById('pkt-pir').textContent = `TRIGGERED (${dist.toFixed(1)}m)`;
     document.getElementById('pkt-pir').className = 'mv red';
+
+    if (!wasActive) {
+      sendWsStatus('ACTIVE', 'Motion detected - streaming');
+    }
   } else {
     pirLedMat.color.setHex(0x4e8a56);
     document.getElementById('pir-hud-badge').className = 'pir-badge';
@@ -1292,7 +1467,13 @@ async function executeSimulationStep(targetTime, dt) {
 
     if (Sim.systemActive) {
       Sim.activeHoldTimer -= dt;
-      if (Sim.activeHoldTimer <= 0) Sim.systemActive = false;
+      if (Sim.activeHoldTimer <= 0) {
+        Sim.systemActive = false;
+        sendWsStatus('IDLE', 'PIR timeout - back to idle');
+        sendWsReset();
+        Sim.targetPan = 0;
+        Sim.targetTilt = 0;
+      }
     }
   }
 
@@ -1333,35 +1514,8 @@ async function executeSimulationStep(targetTime, dt) {
     document.getElementById('cam-fps-pill').className = 'pill';
   }
 
-  // 4. Update Physical Servos: Smooth Slew towards Commanded Target
-  const effectiveDt = Math.max(0.05, Math.min(0.2, dt));
-  const maxStep = Sim.slewRate * effectiveDt;
-
-  const panDiff = Sim.targetPan - Sim.currentPan;
-  if (Math.abs(panDiff) <= maxStep) Sim.currentPan = Sim.targetPan;
-  else Sim.currentPan += Math.sign(panDiff) * maxStep;
-
-  const tiltDiff = Sim.targetTilt - Sim.currentTilt;
-  if (Math.abs(tiltDiff) <= maxStep) Sim.currentTilt = Sim.targetTilt;
-  else Sim.currentTilt += Math.sign(tiltDiff) * maxStep;
-
-  // Apply to physical 3D gimbal hierarchy (negative X tilt points downward towards ground)
-  panTurret.rotation.y = THREE.MathUtils.degToRad(-Sim.currentPan);
-  tiltHead.rotation.x = THREE.MathUtils.degToRad(-Sim.currentTilt);
-
-  // Update Outgoing Packet telemetry
-  document.getElementById('pkt-pan').textContent = Sim.currentPan.toFixed(2) + '°';
-  document.getElementById('pkt-tilt').textContent = Sim.currentTilt.toFixed(2) + '°';
-
-  // Kinematics Slew Lag
-  const remainingLag = Math.hypot(Sim.targetPan - Sim.currentPan, Sim.targetTilt - Sim.currentTilt);
-  document.getElementById('act-pan').textContent = Sim.currentPan.toFixed(2) + '°';
-  document.getElementById('act-tilt').textContent = Sim.currentTilt.toFixed(2) + '°';
-  document.getElementById('act-lag').textContent = remainingLag.toFixed(2) + '°';
-
-  const isMoving = remainingLag > 0.2;
-  document.getElementById('act-status').textContent = isMoving ? 'SLEWING TOWARDS TARGET' : 'AT TARGET (HOLDING)';
-  document.getElementById('act-status').className = 'mv ' + (isMoving ? 'orange' : 'green');
+  // 4. Update Physical Servos (Interpolation towards Target)
+  updateServoSlew(dt);
 
   // 5. Render Sensor Frame directly using Hardware WebGL Renderer
   renderSensorFrame();
@@ -1384,18 +1538,59 @@ async function executeSimulationStep(targetTime, dt) {
   document.getElementById('sys-mode-pill').className = Sim.cameraActive ? 'pill active' : 'pill';
 }
 
-// ── Decoupled Polling Engines (Push / Poll Split) ───────────────────────────
+// ── Physical Servo Slew Update ──────────────────────────────────────────────
+function updateServoSlew(dt) {
+  const effectiveDt = Math.max(0.001, Math.min(0.1, dt));
+  const maxStep = Sim.slewRate * effectiveDt;
+
+  const panDiff = Sim.targetPan - Sim.currentPan;
+  if (Math.abs(panDiff) <= maxStep) Sim.currentPan = Sim.targetPan;
+  else Sim.currentPan += Math.sign(panDiff) * maxStep;
+
+  const tiltDiff = Sim.targetTilt - Sim.currentTilt;
+  if (Math.abs(tiltDiff) <= maxStep) Sim.currentTilt = Sim.targetTilt;
+  else Sim.currentTilt += Math.sign(tiltDiff) * maxStep;
+
+  // Apply to physical 3D gimbal hierarchy (negative X tilt points downward towards ground)
+  panTurret.rotation.y = THREE.MathUtils.degToRad(-Sim.currentPan);
+  tiltHead.rotation.x = THREE.MathUtils.degToRad(-Sim.currentTilt);
+
+  // Update Outgoing Packet telemetry
+  const pktPan = document.getElementById('pkt-pan');
+  if (pktPan) pktPan.textContent = Sim.currentPan.toFixed(2) + '°';
+  const pktTilt = document.getElementById('pkt-tilt');
+  if (pktTilt) pktTilt.textContent = Sim.currentTilt.toFixed(2) + '°';
+
+  // Kinematics Slew Lag
+  const remainingLag = Math.hypot(Sim.targetPan - Sim.currentPan, Sim.targetTilt - Sim.currentTilt);
+  const actPan = document.getElementById('act-pan');
+  if (actPan) actPan.textContent = Sim.currentPan.toFixed(2) + '°';
+  const actTilt = document.getElementById('act-tilt');
+  if (actTilt) actTilt.textContent = Sim.currentTilt.toFixed(2) + '°';
+  const actLag = document.getElementById('act-lag');
+  if (actLag) actLag.textContent = remainingLag.toFixed(2) + '°';
+
+  const isMoving = remainingLag > 0.2;
+  const actStatus = document.getElementById('act-status');
+  if (actStatus) {
+    actStatus.textContent = isMoving ? 'SLEWING TOWARDS TARGET' : 'AT TARGET (HOLDING)';
+    actStatus.className = 'mv ' + (isMoving ? 'orange' : 'green');
+  }
+}
+
+// ── Decoupled Polling Engines (Push / Poll Split, HTTP fallback only) ─────────
 let servoPollTimer = null;
 let actionPollTimer = null;
 
 async function pollServoOnce() {
-  if (!Sim.backendOnline || !Sim.cameraActive) return;
-  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
   if (mode !== 'push_poll') return;
+  if (!Sim.backendOnline || !Sim.cameraActive) return;
 
   const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const camId = getCameraId();
   try {
-    const res = await fetch(`${url}/servo/cam-001`, { signal: AbortSignal.timeout(1500) });
+    const res = await fetch(`${url}/servo/${encodeURIComponent(camId)}`, { signal: AbortSignal.timeout(1500) });
     if (res.ok) {
       const data = await res.json();
       applyBackendResult(data);
@@ -1404,13 +1599,14 @@ async function pollServoOnce() {
 }
 
 async function pollActionOnce() {
-  if (!Sim.backendOnline || !Sim.cameraActive) return;
-  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
   if (mode !== 'push_poll') return;
+  if (!Sim.backendOnline || !Sim.cameraActive) return;
 
   const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const camId = getCameraId();
   try {
-    const res = await fetch(`${url}/action/cam-001`, { signal: AbortSignal.timeout(1500) });
+    const res = await fetch(`${url}/action/${encodeURIComponent(camId)}`, { signal: AbortSignal.timeout(1500) });
     if (res.ok) {
       const data = await res.json();
       if (data.action && data.action !== 'none' && data.action !== 'CONTINUE_SWEEP') {
@@ -1425,7 +1621,7 @@ async function pollActionOnce() {
   } catch (_) {}
 }
 
-// Start polling engines: 80ms fast servo tracking, 400ms slow action checking
+// Start polling engines: 80ms fast servo tracking, 400ms slow action checking (for HTTP mode)
 if (!servoPollTimer) servoPollTimer = setInterval(pollServoOnce, 80);
 if (!actionPollTimer) actionPollTimer = setInterval(pollActionOnce, 400);
 
@@ -1434,16 +1630,44 @@ async function processFrameStep() {
   Sim.isInferring = true;
   const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
   const apiKey = document.getElementById('cfg-key').value;
-  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  const camId = getCameraId();
   const capturePan = Sim.currentPan;
   const captureTilt = Sim.currentTilt;
 
   let success = false;
-  if (Sim.backendOnline) {
+
+  if (mode === 'ws') {
+    if (Sim.ws && Sim.ws.readyState === WebSocket.OPEN) {
+      try {
+        const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.85));
+        if (blob) {
+          // Text metadata first: matches ESP32-CAM ws_client.cpp cameraTask
+          const meta = {
+            type: 'frame',
+            seq: Sim.frameIndex,
+            pan: parseFloat(capturePan.toFixed(2)),
+            tilt: parseFloat(captureTilt.toFixed(2)),
+            w: 640,
+            h: 480,
+          };
+          Sim.ws.send(JSON.stringify(meta));
+          // Immediately send raw JPEG binary frame
+          Sim.ws.send(blob);
+
+          document.getElementById('pkt-status').textContent = `WS SENT (#${Sim.frameIndex}, ${(blob.size / 1024).toFixed(1)}KB)`;
+          document.getElementById('pkt-status').className = 'mv green';
+          success = true;
+        }
+      } catch (err) {
+        console.warn('WS send frame error', err);
+      }
+    }
+  } else if (Sim.backendOnline) {
     try {
       const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.90));
       const fd = new FormData();
-      fd.append('camera_id', 'cam-001');
+      fd.append('camera_id', camId);
       fd.append('pan_angle', capturePan.toString());
       fd.append('tilt_angle', captureTilt.toString());
       fd.append('image_width', '640');
@@ -1452,8 +1676,7 @@ async function processFrameStep() {
       fd.append('image', blob, 'frame.jpg');
 
       if (mode === 'push_poll') {
-        // Fire-and-forget push: returns 202 Accepted in <5ms without blocking
-        const res = await fetch(`${url}/frame/cam-001`, {
+        const res = await fetch(`${url}/frame/${encodeURIComponent(camId)}`, {
           method: 'POST',
           headers: { 'X-Api-Key': apiKey },
           body: fd,
@@ -1466,14 +1689,12 @@ async function processFrameStep() {
           success = true;
         }
       } else {
-        // Synchronous /infer mode: direct request-response
         const res = await fetch(`${url}/infer`, {
           method: 'POST',
           headers: { 'X-Api-Key': apiKey },
           body: fd,
           signal: AbortSignal.timeout(5000),
         });
-
         if (res.ok) {
           const data = await res.json();
           applyBackendResult(data);
@@ -1485,8 +1706,8 @@ async function processFrameStep() {
     }
   }
 
-  // If backend was offline, run exact local servo_math.py & state.py logic
-  if (!success && mode === 'sync') {
+  // If backend was offline or failed, run exact local servo_math.py & state.py logic
+  if (!success && (!Sim.backendOnline || mode === 'sync')) {
     runLocalBackendMath(capturePan, captureTilt);
   }
 
@@ -1653,28 +1874,38 @@ function runLocalBackendMath(capturePan, captureTilt) {
 
 // ── Apply Backend Result to Inspector & Servos ──────────────────────────────
 function applyBackendResult(data) {
-  Sim.lastDetection = data.detection;
+  if (!data) return;
+
+  const pan = typeof data.pan === 'number' ? data.pan : (data.movement ? data.movement.pan_absolute : Sim.currentPan);
+  const tilt = typeof data.tilt === 'number' ? data.tilt : (data.movement ? data.movement.tilt_absolute : Sim.currentTilt);
+  const skip = typeof data.skip === 'boolean' ? data.skip : (data.movement ? Boolean(data.movement.skip) : false);
+  const action = data.action || (data.camera_state ? data.camera_state.active_action : 'none');
+  const phase = data.phase || (data.camera_state ? data.camera_state.phase : (data.detection ? 'tracking' : 'sweeping'));
+
+  data.movement = data.movement || { pan_absolute: pan, tilt_absolute: tilt, skip: skip };
+  data.action = action;
+  data.phase = phase;
+
+  Sim.lastDetection = data.detection || null;
 
   // Sync In-Memory CameraState from Backend Response
   if (data.camera_state) {
     Sim.cameraState = {
-      phase: data.camera_state.phase || data.phase || 'sweeping',
+      phase: data.camera_state.phase || phase,
       frames_without_detection: data.camera_state.frames_without_detection ?? 0,
-      active_action: data.camera_state.active_action || data.action || 'none',
+      active_action: data.camera_state.active_action || action,
       action_frames_remaining: data.camera_state.action_frames_remaining ?? 0,
       sweep_step: data.camera_state.sweep_step ?? 0,
       prev_bbox_center: data.camera_state.prev_bbox_center || (data.detection ? data.detection.bbox_center : null),
       prev_frame_ts: Sim.currentTime,
-      last_pan_absolute: data.camera_state.last_pan_absolute ?? (data.movement ? data.movement.pan_absolute : Sim.currentPan),
-      last_tilt_absolute: data.camera_state.last_tilt_absolute ?? (data.movement ? data.movement.tilt_absolute : Sim.currentTilt),
+      last_pan_absolute: data.camera_state.last_pan_absolute ?? pan,
+      last_tilt_absolute: data.camera_state.last_tilt_absolute ?? tilt,
     };
   } else {
-    Sim.cameraState.phase = data.phase || (data.detection ? 'tracking' : 'sweeping');
-    Sim.cameraState.active_action = data.action || 'none';
-    if (data.movement) {
-      Sim.cameraState.last_pan_absolute = data.movement.pan_absolute;
-      Sim.cameraState.last_tilt_absolute = data.movement.tilt_absolute;
-    }
+    Sim.cameraState.phase = phase;
+    Sim.cameraState.active_action = action;
+    Sim.cameraState.last_pan_absolute = pan;
+    Sim.cameraState.last_tilt_absolute = tilt;
     if (data.detection) {
       Sim.cameraState.frames_without_detection = 0;
       Sim.cameraState.prev_bbox_center = data.detection.bbox_center;
@@ -1698,38 +1929,37 @@ function applyBackendResult(data) {
     document.getElementById('cam-optical-state').style.color = 'var(--primary)';
 
     const isDeadzone = errHypot <= 20;
-    const isSkipped = data.movement.skip;
-    if (isSkipped) {
+    if (skip) {
       document.getElementById('math-l1').textContent = isDeadzone
         ? `Inside Center Deadzone (${errHypot}px <= 20px)`
         : `Angular Deadband (Δ < 1.5° · Hold)`;
       document.getElementById('math-l1').className = 'mv green';
-      document.getElementById('math-l3').textContent = `Hold: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
+      document.getElementById('math-l3').textContent = `Hold: ${pan.toFixed(1)}°, ${tilt.toFixed(1)}°`;
     } else {
       document.getElementById('math-l1').textContent = `Outside Deadzone (${errHypot}px > 20px)`;
       document.getElementById('math-l1').className = 'mv orange';
-      document.getElementById('math-l3').textContent = `Pan: ${data.movement.pan_absolute.toFixed(1)}°, Tilt: ${data.movement.tilt_absolute.toFixed(1)}°`;
+      document.getElementById('math-l3').textContent = `Pan: ${pan.toFixed(1)}°, Tilt: ${tilt.toFixed(1)}°`;
     }
     document.getElementById('math-l2').textContent = `Err: ${errX}px, ${errY}px`;
 
-    if (!data.movement.skip) {
-      Sim.targetPan = data.movement.pan_absolute;
-      Sim.targetTilt = data.movement.tilt_absolute;
+    if (!skip) {
+      Sim.targetPan = pan;
+      Sim.targetTilt = tilt;
     }
   } else {
     document.getElementById('det-cls').textContent = 'None';
     document.getElementById('det-conf').textContent = '—';
-    if (data.phase === 'tracking') {
+    if (phase === 'tracking') {
       const fnd = Sim.cameraState.frames_without_detection || 1;
       document.getElementById('cam-optical-state').textContent = `TRACKING (HOLDING · ${fnd}/5 NO-DET)`;
       document.getElementById('cam-optical-state').style.color = 'var(--primary)';
       document.getElementById('math-l1').textContent = `Holding Target (${fnd}/5 dropped)`;
       document.getElementById('math-l1').className = 'mv green';
       document.getElementById('math-l2').textContent = 'Hysteresis / Re-acquiring';
-      document.getElementById('math-l3').textContent = `Hold: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
-      if (!data.movement.skip) {
-        Sim.targetPan = data.movement.pan_absolute;
-        Sim.targetTilt = data.movement.tilt_absolute;
+      document.getElementById('math-l3').textContent = `Hold: ${pan.toFixed(1)}°, ${tilt.toFixed(1)}°`;
+      if (!skip) {
+        Sim.targetPan = pan;
+        Sim.targetTilt = tilt;
       }
     } else {
       document.getElementById('cam-optical-state').textContent = 'SWEEPING PERIMETER';
@@ -1737,17 +1967,17 @@ function applyBackendResult(data) {
       document.getElementById('math-l1').textContent = 'No Detection → Sweep';
       document.getElementById('math-l1').className = 'mv';
       document.getElementById('math-l2').textContent = '—';
-      document.getElementById('math-l3').textContent = `Sweep: ${data.movement.pan_absolute.toFixed(1)}°, ${data.movement.tilt_absolute.toFixed(1)}°`;
-      Sim.targetPan = data.movement.pan_absolute;
-      Sim.targetTilt = data.movement.tilt_absolute;
+      document.getElementById('math-l3').textContent = `Sweep: ${pan.toFixed(1)}°, ${tilt.toFixed(1)}°`;
+      Sim.targetPan = pan;
+      Sim.targetTilt = tilt;
     }
   }
 
   // Deterrent Action
-  if (data.action === 'BARK_SOUND') {
+  if (action === 'BARK_SOUND') {
     playSoundFromBackend('BARK_SOUND');
     triggerStrobeFlash(0.3);
-  } else if (data.action === 'FLASH_LIGHT') {
+  } else if (action === 'FLASH_LIGHT') {
     triggerStrobeFlash(1.0);
   }
 
@@ -1893,6 +2123,9 @@ function renderLoop() {
     executeSimulationStep(nextTime, dt * Sim.playbackSpeed);
   }
 
+  // Update physical servos smoothly on every frame (independent of play state)
+  updateServoSlew(dt);
+
   controls.update();
 
   // Render Sensor Viewport (OV2640 pinhole on Layer 0)
@@ -1942,6 +2175,10 @@ function resetTime() {
   Sim.cameraState.prev_frame_ts = 0.0;
   Sim.cameraState.last_pan_absolute = 0.0;
   Sim.cameraState.last_tilt_absolute = 0.0;
+
+  // Send backend reset and status over WebSocket
+  sendWsReset();
+  sendWsStatus('IDLE', 'Simulator Reset (t=0)');
 
   executeSimulationStep(0.0, 0.1);
 }

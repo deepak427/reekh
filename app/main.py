@@ -596,16 +596,21 @@ async def _process_frame(frame: FrameData) -> None:
         camera_state=store.camera_state.to_dict(),
     ))
 
-    # Push result directly to ESP32 over WebSocket (if connected).
+    # Push result directly to ESP32 / Simulator over WebSocket (if connected).
     # This replaces the poll pattern — ESP32 no longer needs GET /servo or GET /action.
-    result_json = json.dumps({
+    ws_payload = {
         "pan":    round(movement.pan_absolute, 2),
         "tilt":   round(movement.tilt_absolute, 2),
         "skip":   movement.skip,
         "action": action.value,
         "phase":  phase.value,
         "seq":    frame.seq,
-    })
+        "movement": movement.model_dump(),
+        "camera_state": store.camera_state.to_dict(),
+    }
+    if detection_out is not None:
+        ws_payload["detection"] = detection_out.model_dump()
+    result_json = json.dumps(ws_payload)
     store.push_ws_result(result_json)
 
     # Broadcast inference result to SSE clients so /monitor dashboard updates
@@ -695,10 +700,12 @@ async def camera_websocket(websocket: WebSocket, camera_id: str):
 
     Auth: x-api-key header checked on upgrade.
     """
-    # Check API key from headers on WebSocket upgrade
+    # Check API key from headers or query param on WebSocket upgrade
     api_key_header = websocket.headers.get("x-api-key", "")
+    api_key_query = websocket.query_params.get("api_key", "")
+    api_key_val = api_key_header or api_key_query
     if API_KEY and API_KEY != "change-me-in-production":
-        if api_key_header != API_KEY:
+        if api_key_val != API_KEY:
             await websocket.close(code=4001, reason="Invalid API key")
             return
 
