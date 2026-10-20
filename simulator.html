@@ -547,7 +547,7 @@ pre.state-box {
           <label>Backend URL</label>
           <div style="display:flex; gap:6px;">
             <input type="url" id="cfg-url" value="" placeholder="http://localhost:8000" style="flex:1;" />
-            <button type="button" onclick="checkBackendHealth()" style="padding:4px 10px; font-weight:700; cursor:pointer; background:var(--primary); color:#fff; border:none; border-radius:4px;">Connect</button>
+            <button type="button" onclick="connectWebSocket()" style="padding:4px 10px; font-weight:700; cursor:pointer; background:var(--primary); color:#fff; border:none; border-radius:4px;">Connect</button>
           </div>
         </div>
         <div class="field">
@@ -555,11 +555,12 @@ pre.state-box {
           <input type="text" id="cfg-key" value="08af8f9128cdb5eb5bb045f19a41a558868be2ba0b0026c9cb5734406601b117" />
         </div>
         <div class="field">
-          <label>Architecture Mode</label>
-          <select id="cfg-mode" style="width:100%; padding:6px; font-weight:700; border-radius:4px; border:1px solid var(--border-dark); background:var(--bg-main); font-size:14px;">
-            <option value="push_poll" selected>Push / Poll Decoupled (80ms Servo / 400ms Action)</option>
-            <option value="sync">Synchronous /infer (Direct Request-Response)</option>
-          </select>
+          <label>Camera ID</label>
+          <input type="text" id="cfg-camera-id" value="esp32-cam-01" />
+        </div>
+        <div class="field">
+          <label>WS Status</label>
+          <span id="ws-status-text" style="font-size:12px; font-weight:700; color:var(--text-muted);">Disconnected</span>
         </div>
       </div>
 
@@ -1196,52 +1197,199 @@ function updateAnimalBillboard() {
 }
 updateAnimalBillboard();
 
-// ── Check Backend Health ─────────────────────────────────────────────────────
-async function checkBackendHealth() {
-  const inputEl = document.getElementById('cfg-url');
-  if (!inputEl) return;
-  const url = inputEl.value.trim().replace(/\/$/, '');
-  const pill = document.getElementById('backend-status-pill');
-  if (!url) return;
-  try {
-    const res = await fetch(`${url}/health`, { method: 'GET', signal: AbortSignal.timeout(3500) });
-    if (res.ok) {
-      const data = await res.json();
-      Sim.backendOnline = true;
-      pill.textContent = `Backend: Connected (${data.engine || 'online'})`;
-      pill.className = 'pill active';
-      try {
-        const sRes = await fetch(`${url}/state/cam-001`, { signal: AbortSignal.timeout(2000) });
-        if (sRes.ok) {
-          const sData = await sRes.json();
-          if (sData) {
-            Object.assign(Sim.cameraState, sData);
-            updateCameraStateUI();
-          }
-        }
-      } catch (_) {}
-      return;
-    }
-  } catch (e) {
-    // Backend offline / connecting
-  }
-  Sim.backendOnline = false;
-  pill.textContent = 'Backend: Standalone (Local Sim)';
-  pill.className = 'pill';
+// ── WebSocket Transport (mirrors ws_client.cpp exactly) ──────────────────────
+let _ws = null;
+let _wsReconnectTimer = null;
+let _wsPendingFrameResolve = null;  // resolve fn for current in-flight frame
+
+function getCameraId() {
+  return (document.getElementById('cfg-camera-id')?.value || 'esp32-cam-01').trim();
 }
 
-// Initial check & auto-check every 3s
+function getWsUrl() {
+  const base = (document.getElementById('cfg-url')?.value || '').trim().replace(/\/$/, '');
+  if (!base) return null;
+  // Convert http(s):// → ws(s)://
+  const wsBase = base.replace(/^http/, 'ws');
+  const cameraId = getCameraId();
+  const apiKey = document.getElementById('cfg-key')?.value || '';
+  return { url: `${wsBase}/ws/${cameraId}`, apiKey };
+}
+
+function _wsSetStatus(text, ok) {
+  const el = document.getElementById('ws-status-text');
+  const pill = document.getElementById('backend-status-pill');
+  if (el) { el.textContent = text; el.style.color = ok ? 'var(--green)' : 'var(--text-muted)'; }
+  if (pill) {
+    pill.textContent = ok ? `WebSocket: Connected` : `WebSocket: ${text}`;
+    pill.className = ok ? 'pill active' : 'pill';
+  }
+}
+
+function wsSendText(obj) {
+  if (_ws && _ws.readyState === WebSocket.OPEN) {
+    _ws.send(JSON.stringify(obj));
+    return true;
+  }
+  return false;
+}
+
+function connectWebSocket() {
+  // Clear any pending reconnect
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+  if (_ws) {
+    _ws.onclose = null; // prevent reconnect loop on manual reconnect
+    _ws.close();
+    _ws = null;
+  }
+
+  const cfg = getWsUrl();
+  if (!cfg) { _wsSetStatus('No URL', false); return; }
+
+  _wsSetStatus('Connecting…', false);
+  Sim.backendOnline = false;
+
+  try {
+    _ws = new WebSocket(cfg.url, [], );
+    // Pass API key via subprotocol header isn't possible in browser WS,
+    // so we send it as the first text message right after open (mimics the
+    // x-api-key header the firmware sends — backend also accepts it in the
+    // first message for simulator compatibility).
+    // Actually browsers can't set headers, so we rely on backend's
+    // "change-me-in-production" default allowing open access in dev.
+    // For prod, set API_KEY="" in .env or add token query param support.
+  } catch (e) {
+    _wsSetStatus('Failed to open', false);
+    _scheduleReconnect();
+    return;
+  }
+
+  _ws.onopen = () => {
+    Sim.backendOnline = true;
+    _wsSetStatus('Connected', true);
+
+    // ── Mirrors onWebSocketEvent WStype_CONNECTED in ws_client.cpp ──
+    // 1. Send BOOT status
+    wsSendText({
+      type: 'status',
+      state: 'BOOT',
+      message: 'Simulator connected',
+      camera_id: getCameraId(),
+      uptime_ms: Math.round(performance.now()),
+      wifi_rssi: -55,
+      free_heap: 245000,
+    });
+    // 2. Send reset — backend calls store.reset() → clean (0°, sweeping) state
+    wsSendText({ type: 'reset', camera_id: getCameraId() });
+  };
+
+  _ws.onmessage = (evt) => {
+    // ── Mirrors onWebSocketEvent WStype_TEXT in ws_client.cpp ──
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+
+    const msgType = msg.type;
+
+    if (msgType === 'ping') {
+      // Backend keepalive — silently ignore
+      return;
+    }
+
+    if (msgType === 'simulate_pir') {
+      // Dashboard "Simulate PIR" button hit while simulator is open
+      console.log('[SIM-WS] simulate_pir received from backend');
+      Sim.lastPirTriggerTime = Sim.currentTime;
+      if (!Sim.systemActive) {
+        Sim.systemActive = true;
+        // Jump timeline to PIR trigger point so the scenario plays out
+        if (Sim.currentTime < 1.1) executeSimulationStep(1.1, 0.1);
+      }
+      return;
+    }
+
+    if (msgType === 'simulate_idle') {
+      // Dashboard "Force IDLE" button
+      console.log('[SIM-WS] simulate_idle received from backend');
+      _handleIdleTransition();
+      return;
+    }
+
+    // Normal servo/action result pushed by backend after inference
+    // {"pan":15.2,"tilt":0.0,"skip":false,"action":"FLASH_LIGHT","phase":"tracking","seq":42}
+    if (msg.pan !== undefined || msg.tilt !== undefined) {
+      _applyWsResult(msg);
+      // Unblock frame sender if it was waiting for a result
+      if (_wsPendingFrameResolve) {
+        const resolve = _wsPendingFrameResolve;
+        _wsPendingFrameResolve = null;
+        resolve(msg);
+      }
+    }
+  };
+
+  _ws.onerror = () => {
+    _wsSetStatus('Error', false);
+  };
+
+  _ws.onclose = () => {
+    Sim.backendOnline = false;
+    _wsSetStatus('Disconnected — retrying…', false);
+    _ws = null;
+    _scheduleReconnect();
+  };
+}
+
+function _scheduleReconnect() {
+  if (_wsReconnectTimer) return;
+  _wsReconnectTimer = setTimeout(() => {
+    _wsReconnectTimer = null;
+    connectWebSocket();
+  }, 5000);
+}
+
+function _handleIdleTransition() {
+  Sim.systemActive = false;
+  Sim.lastPirTriggerTime = -1;
+  Sim.targetPan = 0.0;
+  Sim.spotlightPulseEndTime = -1;
+  dirSpotlight.intensity = 0.0;
+  const relayEl = document.getElementById('relay-status');
+  if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
+  // Reset local camera state mirror
+  Object.assign(Sim.cameraState, {
+    phase: 'sweeping', frames_without_detection: 0,
+    active_action: 'none', action_frames_remaining: 0,
+    sweep_step: 0, prev_bbox_center: null,
+    last_pan_absolute: 0.0, last_tilt_absolute: 0.0,
+  });
+  updateCameraStateUI();
+}
+
+function _applyWsResult(msg) {
+  // Translate WS push format → same shape applyBackendResult expects
+  applyBackendResult({
+    phase:    msg.phase || 'sweeping',
+    action:   msg.action || 'none',
+    movement: {
+      pan_absolute:  msg.pan  ?? 0.0,
+      tilt_absolute: msg.tilt ?? 0.0,
+      skip:          msg.skip ?? false,
+    },
+    detection:    msg.detection || null,
+    camera_state: msg.camera_state || null,
+    inference_ms: msg.inference_ms || 0,
+  });
+}
+
+// Initial connection on page load
 const urlInput = document.getElementById('cfg-url');
 if (urlInput) {
   if (!urlInput.value) {
     const origin = window.location.origin;
     urlInput.value = (origin && origin !== 'null' && !origin.startsWith('file:')) ? origin : 'http://localhost:8000';
   }
-  urlInput.addEventListener('input', checkBackendHealth);
-  urlInput.addEventListener('change', checkBackendHealth);
 }
-checkBackendHealth();
-setInterval(checkBackendHealth, 3000);
+connectWebSocket();
 
 // ── Deterministic Trajectory: 10s Timeline ───────────────────────────────────
 function computeAnimalPositionAtTime(t) {
@@ -1294,6 +1442,14 @@ async function executeSimulationStep(targetTime, dt) {
     if (!Sim.systemActive) {
       // Rising edge: IDLE → ACTIVE (mirrors pirTask waking cameraTask)
       Sim.systemActive = true;
+      // ── Mirrors sendStatusMsg("ACTIVE", ...) in pirTask ──
+      wsSendText({
+        type: 'status', state: 'ACTIVE',
+        message: 'Motion detected - streaming',
+        camera_id: getCameraId(),
+        uptime_ms: Math.round(performance.now()),
+        wifi_rssi: -55, free_heap: 245000,
+      });
     }
 
     pirLedMat.color.setHex(0xc94a44);
@@ -1317,6 +1473,16 @@ async function executeSimulationStep(targetTime, dt) {
         Sim.targetPan = 0.0;   // firmware centers pan on IDLE
         Sim.spotlightPulseEndTime = -1;
         dirSpotlight.intensity = 0.0;
+
+        // ── Mirrors firmware: reset JSON + sendStatusMsg("IDLE",...) ──
+        wsSendText({ type: 'reset', camera_id: getCameraId() });
+        wsSendText({
+          type: 'status', state: 'IDLE',
+          message: 'PIR timeout - back to idle',
+          camera_id: getCameraId(),
+          uptime_ms: Math.round(performance.now()),
+          wifi_rssi: -55, free_heap: 245000,
+        });
 
         // Mirror firmware: send reset message → store.reset() on backend
         Sim.cameraState.phase = 'sweeping';
@@ -1446,112 +1612,48 @@ async function executeSimulationStep(targetTime, dt) {
   document.getElementById('sys-mode-pill').className = Sim.cameraActive ? 'pill active' : 'pill';
 }
 
-// ── Decoupled Polling Engines (Push / Poll Split) ───────────────────────────
-let servoPollTimer = null;
-let actionPollTimer = null;
-
-async function pollServoOnce() {
-  if (!Sim.backendOnline || !Sim.cameraActive) return;
-  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
-  if (mode !== 'push_poll') return;
-
-  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
-  try {
-    const res = await fetch(`${url}/servo/cam-001`, { signal: AbortSignal.timeout(1500) });
-    if (res.ok) {
-      const data = await res.json();
-      applyBackendResult(data);
-    }
-  } catch (_) {}
-}
-
-async function pollActionOnce() {
-  if (!Sim.backendOnline || !Sim.cameraActive) return;
-  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
-  if (mode !== 'push_poll') return;
-
-  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
-  try {
-    const res = await fetch(`${url}/action/cam-001`, { signal: AbortSignal.timeout(1500) });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.action && data.action !== 'none' && data.action !== 'CONTINUE_SWEEP') {
-        if (data.action === 'BARK_SOUND') {
-          playSoundFromBackend('BARK_SOUND');
-          triggerStrobeFlash(0.3);
-        } else if (data.action === 'FLASH_LIGHT') {
-          triggerStrobeFlash(1.0);
-        }
-      }
-    }
-  } catch (_) {}
-}
-
-// Start polling engines: 80ms fast servo tracking, 400ms slow action checking
-if (!servoPollTimer) servoPollTimer = setInterval(pollServoOnce, 80);
-if (!actionPollTimer) actionPollTimer = setInterval(pollActionOnce, 400);
-
-// ── Frame Processing & Backend Sync ─────────────────────────────────────────
+// ── Frame Processing & Backend Sync (WebSocket transport) ───────────────────
 async function processFrameStep() {
   Sim.isInferring = true;
-  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
-  const apiKey = document.getElementById('cfg-key').value;
-  const mode = document.getElementById('cfg-mode')?.value || 'push_poll';
-  const capturePan = Sim.currentPan;
+  const capturePan  = Sim.currentPan;
   const captureTilt = Sim.currentTilt;
 
-  let success = false;
-  if (Sim.backendOnline) {
+  // ── Path A: WebSocket connected — mirrors cameraTask in ws_client.cpp ──
+  if (Sim.backendOnline && _ws && _ws.readyState === WebSocket.OPEN) {
     try {
-      const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.90));
-      const fd = new FormData();
-      fd.append('camera_id', 'cam-001');
-      fd.append('pan_angle', capturePan.toString());
-      fd.append('tilt_angle', captureTilt.toString());
-      fd.append('image_width', '640');
-      fd.append('image_height', '480');
-      fd.append('seq', Sim.frameIndex.toString());
-      fd.append('image', blob, 'frame.jpg');
+      // 1. Send metadata text frame (mirrors wsSendTXT(meta) in cameraTask)
+      wsSendText({
+        type: 'frame',
+        seq:  Sim.frameIndex,
+        pan:  parseFloat(capturePan.toFixed(2)),
+        tilt: 0.0,
+        w:    640,
+        h:    480,
+      });
 
-      if (mode === 'push_poll') {
-        // Fire-and-forget push: returns 202 Accepted in <5ms without blocking
-        const res = await fetch(`${url}/frame/cam-001`, {
-          method: 'POST',
-          headers: { 'X-Api-Key': apiKey },
-          body: fd,
-          signal: AbortSignal.timeout(3000),
-        });
-        if (res.ok) {
-          const acc = await res.json();
-          document.getElementById('pkt-status').textContent = `PUSHED (#${acc.seq}, drop=${acc.dropped})`;
-          document.getElementById('pkt-status').className = 'mv green';
-          success = true;
-        }
-      } else {
-        // Synchronous /infer mode: direct request-response
-        const res = await fetch(`${url}/infer`, {
-          method: 'POST',
-          headers: { 'X-Api-Key': apiKey },
-          body: fd,
-          signal: AbortSignal.timeout(5000),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          applyBackendResult(data);
-          success = true;
-        }
+      // 2. Send raw JPEG binary (mirrors wsSendBIN(fb->buf, fb->len))
+      const blob = await new Promise(r => camCanvas.toBlob(r, 'image/jpeg', 0.90));
+      const arrayBuf = await blob.arrayBuffer();
+      if (_ws.readyState === WebSocket.OPEN) {
+        _ws.send(arrayBuf);
       }
+
+      document.getElementById('pkt-status').textContent =
+        `WS SENT (#${Sim.frameIndex}, ${(arrayBuf.byteLength / 1024).toFixed(1)}KB)`;
+      document.getElementById('pkt-status').className = 'mv green';
+
+      // 3. Result arrives asynchronously via _ws.onmessage → _applyWsResult
+      // We don't block here — backend pushes back when inference completes.
+      // isInferring stays false so next frame can queue immediately.
     } catch (err) {
-      // Non-fatal network drop
+      console.warn('[SIM-WS] frame send error:', err);
     }
+    Sim.isInferring = false;
+    return;
   }
 
-  // If backend was offline, run exact local servo_math.py & state.py logic
-  if (!success && mode === 'sync') {
-    runLocalBackendMath(capturePan, captureTilt);
-  }
-
+  // ── Path B: No WebSocket — run local servo_math.py emulation offline ──
+  runLocalBackendMath(capturePan, captureTilt);
   Sim.isInferring = false;
 }
 
@@ -2024,6 +2126,16 @@ function resetTime() {
   Sim.cameraState.prev_frame_ts = 0.0;
   Sim.cameraState.last_pan_absolute = 0.0;
   Sim.cameraState.last_tilt_absolute = 0.0;
+
+  // ── Mirrors firmware: reset + IDLE status sent on PIR timeout / re-init ──
+  wsSendText({ type: 'reset', camera_id: getCameraId() });
+  wsSendText({
+    type: 'status', state: 'IDLE',
+    message: 'Simulator reset to t=0',
+    camera_id: getCameraId(),
+    uptime_ms: Math.round(performance.now()),
+    wifi_rssi: -55, free_heap: 245000,
+  });
 
   executeSimulationStep(0.0, 0.1);
 }
