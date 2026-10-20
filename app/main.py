@@ -767,6 +767,7 @@ async def monitor_stream():
 
 # ── Monitor & Simulator UI ───────────────────────────────────────────────────
 
+@app.get("/simulate", response_class=HTMLResponse)
 @app.get("/simulator", response_class=HTMLResponse)
 def simulator_ui():
     """Serves the 3D Agricultural Surveillance Simulator & State Inspector."""
