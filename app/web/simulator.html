@@ -496,11 +496,10 @@ pre.state-box {
       <div class="card">
         <div class="card-head">Timeline Progression Guide</div>
         <div style="font-size:11px; line-height:1.5; color:var(--text-muted);">
-          • <strong>t = 0.0s to 1.0s:</strong> Animal is outside PIR zone ($d > 8\text{m}$). Camera is <strong>IDLE (Sleep)</strong>. Spotlight is <strong>OFF</strong>.<br/>
-          • <strong>t = 1.1s:</strong> Animal crosses PIR boundary ($d = 7.7\text{m} \le 8\text{m}$) &rarr; PIR interrupt fires &rarr; Camera wakes &amp; streams. Spotlight stays <strong>OFF</strong> until a deterrent action fires.<br/>
-          • <strong>t = 1.2s to 4.5s:</strong> Camera streams frames &rarr; Backend runs 3-layer servo math &rarr; Pan servo tracks animal. Tilt is <strong>fixed at 0° (V1 hardware)</strong>.<br/>
-          • <strong>t &ge; 4.5s:</strong> Backend sends <code>FLASH_LIGHT</code> or <code>BARK_SOUND</code> action &rarr; Relay fires spotlight for <strong>500 ms</strong>, then cuts off &rarr; Animal flees.<br/>
-          • <strong>30s IDLE timeout:</strong> If PIR sees no motion for 30 continuous seconds, firmware transitions to <strong>IDLE</strong> &rarr; pan centers to 0° &rarr; backend state resets. (Timeline shows countdown badge when active.)
+          • <strong>t = 0.0s to 1.0s:</strong> Animal is outside PIR zone ($d > 8\text{m}$). Camera &amp; light are <strong>OFF (Sleep)</strong>.<br/>
+          • <strong>t = 1.1s:</strong> Animal crosses into PIR zone ($d = 7.7\text{m} \le 8\text{m}$) &rarr; Light switches <strong>ON</strong> &rarr; Camera wakes up!<br/>
+          • <strong>t = 1.2s to 4.5s:</strong> Camera streams frames &rarr; Backend runs 3-layer servo math &rarr; Gimbal follows animal.<br/>
+          • <strong>t &ge; 4.5s:</strong> Deterrent sound fires &rarr; Animal flees crop area.
         </div>
       </div>
 
@@ -509,14 +508,14 @@ pre.state-box {
         <div class="card-head">Gimbal &amp; Actuators</div>
         <div class="meter-row">
           <span class="mk">Pan Servo (GPIO 12)</span>
-          <span class="mv">&minus;90.0&deg; to +90.0&deg; (0&deg; Center)</span>
+          <span class="mv">0.0&deg; to 180.0&deg; (90&deg; Center)</span>
         </div>
         <div class="meter-row">
           <span class="mk">Tilt Servo (GPIO 14)</span>
-          <span class="mv" style="color:var(--text-muted);">Fixed 0.0&deg; — V1 Pan-Only Mode</span>
+          <span class="mv">0.0&deg; to 180.0&deg; (90&deg; Level)</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Pan Slew Rate</span>
+          <span class="mk">Slew Rate Limit</span>
           <span class="mv orange">280.0&deg;/sec</span>
         </div>
         <div class="meter-row">
@@ -526,10 +525,6 @@ pre.state-box {
         <div class="meter-row">
           <span class="mk">12V Spotlight Relay (GPIO 15)</span>
           <span class="mv" id="relay-status">OPEN (STANDBY)</span>
-        </div>
-        <div class="meter-row" style="align-items:flex-start; padding-top:5px; padding-bottom:5px;">
-          <span class="mk" style="padding-top:2px;">Relay Behaviour</span>
-          <span class="mv" style="font-size:10px; color:var(--text-muted); text-align:right; line-height:1.4;">Pulses 500 ms on<br/>FLASH_LIGHT action only</span>
         </div>
         <div class="meter-row">
           <span class="mk">DFPlayer Audio (GPIO 16/17)</span>
@@ -547,20 +542,24 @@ pre.state-box {
           <label>Backend URL</label>
           <div style="display:flex; gap:6px;">
             <input type="url" id="cfg-url" value="" placeholder="http://localhost:8000" style="flex:1;" />
-            <button type="button" onclick="connectWebSocket()" style="padding:4px 10px; font-weight:700; cursor:pointer; background:var(--primary); color:#fff; border:none; border-radius:4px;">Connect</button>
+            <button type="button" onclick="checkBackendHealth()" style="padding:4px 10px; font-weight:700; cursor:pointer; background:var(--primary); color:#fff; border:none; border-radius:4px;">Connect</button>
           </div>
+        </div>
+        <div class="field">
+          <label>Camera ID</label>
+          <input type="text" id="cfg-cam-id" value="esp32-cam-01" />
         </div>
         <div class="field">
           <label>API Key</label>
           <input type="text" id="cfg-key" value="08af8f9128cdb5eb5bb045f19a41a558868be2ba0b0026c9cb5734406601b117" />
         </div>
         <div class="field">
-          <label>Camera ID</label>
-          <input type="text" id="cfg-camera-id" value="esp32-cam-01" />
-        </div>
-        <div class="field">
-          <label>WS Status</label>
-          <span id="ws-status-text" style="font-size:12px; font-weight:700; color:var(--text-muted);">Disconnected</span>
+          <label>Architecture Mode</label>
+          <select id="cfg-mode" style="width:100%; padding:6px; font-weight:700; border-radius:4px; border:1px solid var(--border-dark); background:var(--bg-main); font-size:13px;">
+            <option value="ws" selected>WebSocket (Real Firmware Protocol · WS)</option>
+            <option value="push_poll">Push / Poll Decoupled (HTTP Fallback)</option>
+            <option value="sync">Synchronous /infer (Direct HTTP)</option>
+          </select>
         </div>
       </div>
 
@@ -674,7 +673,7 @@ pre.state-box {
         </div>
         <div class="meter-row">
           <span class="mk">Tilt Angle At Capture</span>
-          <span class="mv" style="color:var(--text-muted);" id="pkt-tilt">0.00° (fixed — V1)</span>
+          <span class="mv blue" id="pkt-tilt">0.00°</span>
         </div>
         <div class="meter-row">
           <span class="mk">PIR Hardware Trigger</span>
@@ -703,27 +702,27 @@ pre.state-box {
         </div>
         <div class="meter-row">
           <span class="mk">Layer 3: Absolute Target</span>
-          <span class="mv orange" id="math-l3">Pan: 0.0° (Tilt fixed 0°)</span>
+          <span class="mv orange" id="math-l3">Pan: 0.0°, Tilt: 0.0°</span>
         </div>
       </div>
 
-      <!-- 4. Physical Motor Kinematics (Pan-Only) -->
+      <!-- 4. Physical Motor Slew Lag -->
       <div class="card">
-        <div class="card-head">⚙️ Pan Servo Kinematics (V1 Pan-Only)</div>
+        <div class="card-head">⚙️ Physical Motor Kinematics</div>
         <div class="meter-row">
           <span class="mk">Physical Pan Angle</span>
           <span class="mv blue" id="act-pan">0.00°</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Tilt Angle</span>
-          <span class="mv" style="color:var(--text-muted);" id="act-tilt">0.00° (fixed)</span>
+          <span class="mk">Physical Tilt Angle</span>
+          <span class="mv blue" id="act-tilt">0.00°</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Pan Slew Remaining</span>
+          <span class="mk">Remaining Slew Lag</span>
           <span class="mv" id="act-lag">0.00°</span>
         </div>
         <div class="meter-row">
-          <span class="mk">Pan Motor Status</span>
+          <span class="mk">Motor Slew Status</span>
           <span class="mv green" id="act-status">HOLDING</span>
         </div>
       </div>
@@ -831,22 +830,16 @@ const Sim = {
   frameIndex: 0,
 
   // Hardware State: PIR Motion Sensor
-  // Mirrors firmware: lastPirTriggerMs + PIR_IDLE_TIMEOUT_MS (30s)
   pirDetected: false,
-  systemActive: false,        // true while camera is streaming (ACTIVE state)
-  lastPirTriggerTime: -1,     // sim-clock seconds of last PIR trigger (-1 = never)
-  PIR_IDLE_TIMEOUT: 30.0,     // matches firmware PIR_IDLE_TIMEOUT_MS = 30000
+  systemActive: false, // true when light is ON and camera is streaming
+  activeHoldTimer: 0.0,
 
   // Physical Servos: Commanded Target vs Current Physical Angle (degrees)
-  // V1 hardware: Pan-only. Tilt servo is wired but firmware locks it at 0°.
   currentPan: 0.0,
-  currentTilt: 0.0,   // always 0 — kept for compatibility with backend math
+  currentTilt: 0.0,
   targetPan: 0.0,
-  targetTilt: 0.0,    // always 0 — backend still sends it, firmware ignores it
+  targetTilt: 0.0,
   slewRate: 280.0, // deg/sec physical servo speed
-
-  // Spotlight pulse state (relay fires for 500ms on FLASH_LIGHT, not persistent)
-  spotlightPulseEndTime: -1,  // sim-clock time when pulse expires (-1 = off)
 
   // Wildlife Target
   species: 'Leopard',
@@ -871,6 +864,8 @@ const Sim = {
   lastDetection: null,
   isInferring: false,
   backendOnline: false,
+  ws: null,
+  wsConnected: false,
 };
 
 // ── Three.js 3D Virtual Scene Setup ──────────────────────────────────────────
@@ -1197,199 +1192,214 @@ function updateAnimalBillboard() {
 }
 updateAnimalBillboard();
 
-// ── WebSocket Transport (mirrors ws_client.cpp exactly) ──────────────────────
-let _ws = null;
-let _wsReconnectTimer = null;
-let _wsPendingFrameResolve = null;  // resolve fn for current in-flight frame
-
+// ── Helper: Active Camera ID ────────────────────────────────────────────────
 function getCameraId() {
-  return (document.getElementById('cfg-camera-id')?.value || 'esp32-cam-01').trim();
+  const el = document.getElementById('cfg-cam-id');
+  return (el && el.value.trim()) || 'esp32-cam-01';
 }
 
-function getWsUrl() {
-  const base = (document.getElementById('cfg-url')?.value || '').trim().replace(/\/$/, '');
-  if (!base) return null;
-  // Convert http(s):// → ws(s)://
-  const wsBase = base.replace(/^http/, 'ws');
-  const cameraId = getCameraId();
-  const apiKey = document.getElementById('cfg-key')?.value || '';
-  return { url: `${wsBase}/ws/${cameraId}`, apiKey };
-}
-
-function _wsSetStatus(text, ok) {
-  const el = document.getElementById('ws-status-text');
-  const pill = document.getElementById('backend-status-pill');
-  if (el) { el.textContent = text; el.style.color = ok ? 'var(--green)' : 'var(--text-muted)'; }
-  if (pill) {
-    pill.textContent = ok ? `WebSocket: Connected` : `WebSocket: ${text}`;
-    pill.className = ok ? 'pill active' : 'pill';
+// ── WebSocket Protocol for ESP32-CAM Simulator ──────────────────────────────
+function sendWsReset() {
+  const camId = getCameraId();
+  if (Sim.ws && Sim.ws.readyState === WebSocket.OPEN) {
+    Sim.ws.send(JSON.stringify({ type: 'reset', camera_id: camId }));
+  } else if (Sim.backendOnline) {
+    const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+    fetch(`${url}/state/${camId}`, { method: 'DELETE' }).catch(() => {});
   }
 }
 
-function wsSendText(obj) {
-  if (_ws && _ws.readyState === WebSocket.OPEN) {
-    _ws.send(JSON.stringify(obj));
-    return true;
+function sendWsStatus(state, message) {
+  const camId = getCameraId();
+  if (Sim.ws && Sim.ws.readyState === WebSocket.OPEN) {
+    Sim.ws.send(JSON.stringify({
+      type: 'status',
+      state: state,
+      message: message,
+      camera_id: camId,
+      uptime_ms: Math.round(Sim.currentTime * 1000),
+      wifi_rssi: -45,
+      free_heap: 245000,
+    }));
   }
-  return false;
 }
 
 function connectWebSocket() {
-  // Clear any pending reconnect
-  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
-  if (_ws) {
-    _ws.onclose = null; // prevent reconnect loop on manual reconnect
-    _ws.close();
-    _ws = null;
-  }
-
-  const cfg = getWsUrl();
-  if (!cfg) { _wsSetStatus('No URL', false); return; }
-
-  _wsSetStatus('Connecting…', false);
-  Sim.backendOnline = false;
-
-  try {
-    _ws = new WebSocket(cfg.url, [], );
-    // Pass API key via subprotocol header isn't possible in browser WS,
-    // so we send it as the first text message right after open (mimics the
-    // x-api-key header the firmware sends — backend also accepts it in the
-    // first message for simulator compatibility).
-    // Actually browsers can't set headers, so we rely on backend's
-    // "change-me-in-production" default allowing open access in dev.
-    // For prod, set API_KEY="" in .env or add token query param support.
-  } catch (e) {
-    _wsSetStatus('Failed to open', false);
-    _scheduleReconnect();
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  if (mode !== 'ws') {
+    if (Sim.ws) {
+      try { Sim.ws.close(); } catch (_) {}
+      Sim.ws = null;
+      Sim.wsConnected = false;
+    }
     return;
   }
 
-  _ws.onopen = () => {
-    Sim.backendOnline = true;
-    _wsSetStatus('Connected', true);
+  const urlInput = document.getElementById('cfg-url');
+  if (!urlInput || !urlInput.value) return;
+  const httpUrl = urlInput.value.trim().replace(/\/$/, '');
+  const apiKey = document.getElementById('cfg-key')?.value.trim() || '';
+  const camId = getCameraId();
 
-    // ── Mirrors onWebSocketEvent WStype_CONNECTED in ws_client.cpp ──
-    // 1. Send BOOT status
-    wsSendText({
-      type: 'status',
-      state: 'BOOT',
-      message: 'Simulator connected',
-      camera_id: getCameraId(),
-      uptime_ms: Math.round(performance.now()),
-      wifi_rssi: -55,
-      free_heap: 245000,
-    });
-    // 2. Send reset — backend calls store.reset() → clean (0°, sweeping) state
-    wsSendText({ type: 'reset', camera_id: getCameraId() });
-  };
+  let wsUrl = httpUrl.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
+  wsUrl += `/ws/${encodeURIComponent(camId)}?api_key=${encodeURIComponent(apiKey)}`;
 
-  _ws.onmessage = (evt) => {
-    // ── Mirrors onWebSocketEvent WStype_TEXT in ws_client.cpp ──
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
+  if (Sim.ws && (Sim.ws.readyState === WebSocket.CONNECTING || Sim.ws.readyState === WebSocket.OPEN)) {
+    if (Sim.ws._targetUrl === wsUrl) return; // already connected to this URL
+    try { Sim.ws.close(); } catch (_) {}
+  }
 
-    const msgType = msg.type;
+  try {
+    const ws = new WebSocket(wsUrl);
+    ws._targetUrl = wsUrl;
+    Sim.ws = ws;
 
-    if (msgType === 'ping') {
-      // Backend keepalive — silently ignore
-      return;
-    }
-
-    if (msgType === 'simulate_pir') {
-      // Dashboard "Simulate PIR" button hit while simulator is open
-      console.log('[SIM-WS] simulate_pir received from backend');
-      Sim.lastPirTriggerTime = Sim.currentTime;
-      if (!Sim.systemActive) {
-        Sim.systemActive = true;
-        // Jump timeline to PIR trigger point so the scenario plays out
-        if (Sim.currentTime < 1.1) executeSimulationStep(1.1, 0.1);
+    ws.onopen = () => {
+      Sim.wsConnected = true;
+      const pill = document.getElementById('backend-status-pill');
+      if (pill) {
+        pill.textContent = `WS: Connected (${camId})`;
+        pill.className = 'pill active';
       }
-      return;
-    }
+      // 1. Send reset on WS open (matches real firmware)
+      sendWsReset();
+      // 2. Send status BOOT
+      sendWsStatus('BOOT', 'Simulator Connected');
+    };
 
-    if (msgType === 'simulate_idle') {
-      // Dashboard "Force IDLE" button
-      console.log('[SIM-WS] simulate_idle received from backend');
-      _handleIdleTransition();
-      return;
-    }
+    ws.onmessage = (event) => {
+      if (typeof event.data !== 'string') return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ping') return; // backend keepalive
 
-    // Normal servo/action result pushed by backend after inference
-    // {"pan":15.2,"tilt":0.0,"skip":false,"action":"FLASH_LIGHT","phase":"tracking","seq":42}
-    if (msg.pan !== undefined || msg.tilt !== undefined) {
-      _applyWsResult(msg);
-      // Unblock frame sender if it was waiting for a result
-      if (_wsPendingFrameResolve) {
-        const resolve = _wsPendingFrameResolve;
-        _wsPendingFrameResolve = null;
-        resolve(msg);
+        if (data.type === 'simulate_pir') {
+          // Monitor dashboard Simulate PIR button clicked!
+          Sim.systemActive = true;
+          Sim.activeHoldTimer = 6.0;
+          sendWsStatus('ACTIVE', 'Motion detected (Simulate PIR from monitor)');
+          return;
+        }
+
+        if (data.type === 'simulate_idle') {
+          // Monitor dashboard Simulate IDLE button clicked!
+          Sim.systemActive = false;
+          Sim.activeHoldTimer = 0;
+          sendWsStatus('IDLE', 'Forced IDLE from monitor');
+          sendWsReset();
+          Sim.targetPan = 0;
+          Sim.targetTilt = 0;
+          return;
+        }
+
+        // Inference result push from backend
+        if (data.pan !== undefined || data.movement !== undefined) {
+          applyBackendResult(data);
+        }
+      } catch (e) {
+        console.warn('WS message parse error', e);
       }
+    };
+
+    ws.onclose = () => {
+      Sim.wsConnected = false;
+      const pill = document.getElementById('backend-status-pill');
+      if (pill && (!Sim.backendOnline || mode === 'ws')) {
+        pill.textContent = 'WS: Disconnected';
+        pill.className = 'pill';
+      }
+    };
+
+    ws.onerror = (e) => {
+      console.warn('WS error', e);
+    };
+  } catch (err) {
+    console.warn('WS connect failed', err);
+  }
+}
+
+// ── Check Backend Health ─────────────────────────────────────────────────────
+async function checkBackendHealth() {
+  const inputEl = document.getElementById('cfg-url');
+  if (!inputEl) return;
+  const url = inputEl.value.trim().replace(/\/$/, '');
+  const pill = document.getElementById('backend-status-pill');
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  const camId = getCameraId();
+
+  if (!url) return;
+  try {
+    const res = await fetch(`${url}/health`, { method: 'GET', signal: AbortSignal.timeout(3500) });
+    if (res.ok) {
+      const data = await res.json();
+      Sim.backendOnline = true;
+      if (mode === 'ws') {
+        connectWebSocket();
+        if (Sim.wsConnected) {
+          pill.textContent = `WS: Connected (${camId})`;
+          pill.className = 'pill active';
+        } else {
+          pill.textContent = `WS: Connecting... (${camId})`;
+          pill.className = 'pill';
+        }
+      } else {
+        pill.textContent = `HTTP: Connected (${data.engine || 'online'})`;
+        pill.className = 'pill active';
+      }
+
+      try {
+        const sRes = await fetch(`${url}/state/${encodeURIComponent(camId)}`, { signal: AbortSignal.timeout(2000) });
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData) {
+            Object.assign(Sim.cameraState, sData);
+            updateCameraStateUI();
+          }
+        }
+      } catch (_) {}
+      return;
     }
-  };
-
-  _ws.onerror = () => {
-    _wsSetStatus('Error', false);
-  };
-
-  _ws.onclose = () => {
-    Sim.backendOnline = false;
-    _wsSetStatus('Disconnected — retrying…', false);
-    _ws = null;
-    _scheduleReconnect();
-  };
+  } catch (e) {
+    // Backend offline / connecting
+  }
+  Sim.backendOnline = false;
+  pill.textContent = 'Backend: Standalone (Local Sim)';
+  pill.className = 'pill';
 }
 
-function _scheduleReconnect() {
-  if (_wsReconnectTimer) return;
-  _wsReconnectTimer = setTimeout(() => {
-    _wsReconnectTimer = null;
-    connectWebSocket();
-  }, 5000);
-}
-
-function _handleIdleTransition() {
-  Sim.systemActive = false;
-  Sim.lastPirTriggerTime = -1;
-  Sim.targetPan = 0.0;
-  Sim.spotlightPulseEndTime = -1;
-  dirSpotlight.intensity = 0.0;
-  const relayEl = document.getElementById('relay-status');
-  if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
-  // Reset local camera state mirror
-  Object.assign(Sim.cameraState, {
-    phase: 'sweeping', frames_without_detection: 0,
-    active_action: 'none', action_frames_remaining: 0,
-    sweep_step: 0, prev_bbox_center: null,
-    last_pan_absolute: 0.0, last_tilt_absolute: 0.0,
-  });
-  updateCameraStateUI();
-}
-
-function _applyWsResult(msg) {
-  // Translate WS push format → same shape applyBackendResult expects
-  applyBackendResult({
-    phase:    msg.phase || 'sweeping',
-    action:   msg.action || 'none',
-    movement: {
-      pan_absolute:  msg.pan  ?? 0.0,
-      tilt_absolute: msg.tilt ?? 0.0,
-      skip:          msg.skip ?? false,
-    },
-    detection:    msg.detection || null,
-    camera_state: msg.camera_state || null,
-    inference_ms: msg.inference_ms || 0,
-  });
-}
-
-// Initial connection on page load
+// Initial check & auto-check every 3s
 const urlInput = document.getElementById('cfg-url');
 if (urlInput) {
   if (!urlInput.value) {
     const origin = window.location.origin;
     urlInput.value = (origin && origin !== 'null' && !origin.startsWith('file:')) ? origin : 'http://localhost:8000';
   }
+  urlInput.addEventListener('input', checkBackendHealth);
+  urlInput.addEventListener('change', checkBackendHealth);
 }
-connectWebSocket();
+
+document.getElementById('cfg-mode')?.addEventListener('change', () => {
+  const mode = document.getElementById('cfg-mode')?.value;
+  if (mode === 'ws') connectWebSocket();
+  else if (Sim.ws) {
+    try { Sim.ws.close(); } catch (_) {}
+    Sim.ws = null;
+    Sim.wsConnected = false;
+  }
+  checkBackendHealth();
+});
+
+document.getElementById('cfg-cam-id')?.addEventListener('change', () => {
+  if (Sim.ws) {
+    try { Sim.ws.close(); } catch (_) {}
+    Sim.ws = null;
+    Sim.wsConnected = false;
+  }
+  checkBackendHealth();
+});
+
+checkBackendHealth();
+setInterval(checkBackendHealth, 3000);
 
 // ── Deterministic Trajectory: 10s Timeline ───────────────────────────────────
 function computeAnimalPositionAtTime(t) {
@@ -1428,113 +1438,56 @@ async function executeSimulationStep(targetTime, dt) {
   }
 
   // 2. Evaluate PIR Motion Sensor (at post x=0, z=0, looking -Z)
-  //    Mirrors firmware pirTask: trigger refreshes lastPirTriggerMs while pin HIGH;
-  //    30s without a refresh → STATE_IDLE, pan centers, backend state resets.
   const dist = Math.hypot(Sim.animalPos.x, Sim.animalPos.z);
   const angleDeg = Math.abs(THREE.MathUtils.radToDeg(Math.atan2(Sim.animalPos.x, -Sim.animalPos.z)));
   const inPIR = dist <= 8.0 && angleDeg <= 50.0 && Sim.animalPos.z < -1.5;
   Sim.pirDetected = inPIR;
 
+  const wasActive = Sim.systemActive;
+
+  // Real Hardware Lifecycle:
   if (inPIR) {
-    // PIR pin HIGH — refresh trigger timestamp (mirrors lastPirTriggerMs = millis())
-    Sim.lastPirTriggerTime = Sim.currentTime;
-
-    if (!Sim.systemActive) {
-      // Rising edge: IDLE → ACTIVE (mirrors pirTask waking cameraTask)
-      Sim.systemActive = true;
-      // ── Mirrors sendStatusMsg("ACTIVE", ...) in pirTask ──
-      wsSendText({
-        type: 'status', state: 'ACTIVE',
-        message: 'Motion detected - streaming',
-        camera_id: getCameraId(),
-        uptime_ms: Math.round(performance.now()),
-        wifi_rssi: -55, free_heap: 245000,
-      });
-    }
-
+    Sim.systemActive = true;
+    Sim.activeHoldTimer = 6.0;
     pirLedMat.color.setHex(0xc94a44);
     document.getElementById('pir-hud-badge').className = 'pir-badge triggered';
-    document.getElementById('pir-hud-badge').innerHTML =
-      `<span>PIR Active · Motion (${dist.toFixed(1)}m)</span>`;
+    document.getElementById('pir-hud-badge').innerHTML = `<span>Motion Triggered (${dist.toFixed(1)}m)</span>`;
     document.getElementById('pkt-pir').textContent = `TRIGGERED (${dist.toFixed(1)}m)`;
     document.getElementById('pkt-pir').className = 'mv red';
+
+    if (!wasActive) {
+      sendWsStatus('ACTIVE', 'Motion detected - streaming');
+    }
   } else {
     pirLedMat.color.setHex(0x4e8a56);
+    document.getElementById('pir-hud-badge').className = 'pir-badge';
+    document.getElementById('pir-hud-badge').innerHTML = `<span>PIR Standby (${dist.toFixed(1)}m)</span>`;
+    document.getElementById('pkt-pir').textContent = `CLEAR (${dist.toFixed(1)}m)`;
+    document.getElementById('pkt-pir').className = 'mv green';
 
-    if (Sim.systemActive && Sim.lastPirTriggerTime >= 0) {
-      // No motion — check 30s timeout (mirrors pirTask elapsed >= PIR_IDLE_TIMEOUT_MS)
-      const elapsed = Sim.currentTime - Sim.lastPirTriggerTime;
-      const remaining = Math.max(0, Sim.PIR_IDLE_TIMEOUT - elapsed);
-
-      if (elapsed >= Sim.PIR_IDLE_TIMEOUT) {
-        // Timeout → IDLE: mirrors firmware sending reset + centering pan
+    if (Sim.systemActive) {
+      Sim.activeHoldTimer -= dt;
+      if (Sim.activeHoldTimer <= 0) {
         Sim.systemActive = false;
-        Sim.lastPirTriggerTime = -1;
-        Sim.targetPan = 0.0;   // firmware centers pan on IDLE
-        Sim.spotlightPulseEndTime = -1;
-        dirSpotlight.intensity = 0.0;
-
-        // ── Mirrors firmware: reset JSON + sendStatusMsg("IDLE",...) ──
-        wsSendText({ type: 'reset', camera_id: getCameraId() });
-        wsSendText({
-          type: 'status', state: 'IDLE',
-          message: 'PIR timeout - back to idle',
-          camera_id: getCameraId(),
-          uptime_ms: Math.round(performance.now()),
-          wifi_rssi: -55, free_heap: 245000,
-        });
-
-        // Mirror firmware: send reset message → store.reset() on backend
-        Sim.cameraState.phase = 'sweeping';
-        Sim.cameraState.frames_without_detection = 0;
-        Sim.cameraState.active_action = 'none';
-        Sim.cameraState.action_frames_remaining = 0;
-        Sim.cameraState.sweep_step = 0;
-        Sim.cameraState.prev_bbox_center = null;
-        Sim.cameraState.last_pan_absolute = 0.0;
-        Sim.cameraState.last_tilt_absolute = 0.0;
-        updateCameraStateUI();
-
-        const relayEl = document.getElementById('relay-status');
-        if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
-
-        document.getElementById('pir-hud-badge').className = 'pir-badge';
-        document.getElementById('pir-hud-badge').innerHTML =
-          `<span>PIR Timeout → IDLE (30s · Pan centered)</span>`;
-        document.getElementById('pkt-pir').textContent = 'CLEAR (Timeout)';
-        document.getElementById('pkt-pir').className = 'mv';
-      } else {
-        // Still within timeout window — show countdown
-        document.getElementById('pir-hud-badge').className = 'pir-badge';
-        document.getElementById('pir-hud-badge').innerHTML =
-          `<span>PIR Clear · IDLE in ${remaining.toFixed(0)}s</span>`;
-        document.getElementById('pkt-pir').textContent =
-          `CLEAR (timeout in ${remaining.toFixed(0)}s)`;
-        document.getElementById('pkt-pir').className = 'mv';
+        sendWsStatus('IDLE', 'PIR timeout - back to idle');
+        sendWsReset();
+        Sim.targetPan = 0;
+        Sim.targetTilt = 0;
       }
-    } else {
-      // Already IDLE or never triggered
-      document.getElementById('pir-hud-badge').className = 'pir-badge';
-      document.getElementById('pir-hud-badge').innerHTML =
-        `<span>PIR Standby · Camera Sleeping (${dist.toFixed(1)}m)</span>`;
-      document.getElementById('pkt-pir').textContent = `CLEAR (${dist.toFixed(1)}m)`;
-      document.getElementById('pkt-pir').className = 'mv';
     }
   }
 
-  // 3. Camera power (PIR-driven) and relay/spotlight state (action-driven, not PIR-driven)
+  // 3. Update Directional Spotlight & Camera Power
+  // Clean natural spotlight intensity: 2.2 (when active), 0 (when sleep)
   const relayEl = document.getElementById('relay-status');
-
   if (Sim.systemActive) {
+    Sim.directionalLightOn = true;
     Sim.cameraActive = true;
-
-    // Relay/spotlight: only ON during a FLASH_LIGHT pulse window
-    const spotOn = Sim.spotlightPulseEndTime >= 0 && Sim.currentTime <= Sim.spotlightPulseEndTime;
-    dirSpotlight.intensity = spotOn ? 2.2 : 0.0;
+    dirSpotlight.intensity = 2.2;
 
     if (relayEl) {
-      relayEl.textContent = spotOn ? 'CLOSED (12V ON · Flash)' : 'OPEN (Waiting for Action)';
-      relayEl.className = spotOn ? 'mv orange' : 'mv';
+      relayEl.textContent = 'CLOSED (12V ON)';
+      relayEl.className = 'mv orange';
     }
 
     document.getElementById('pkt-status').textContent = 'TRANSMITTING (15 FPS)';
@@ -1544,6 +1497,7 @@ async function executeSimulationStep(targetTime, dt) {
     document.getElementById('cam-fps-pill').textContent = '15 FPS';
     document.getElementById('cam-fps-pill').className = 'pill active';
   } else {
+    Sim.directionalLightOn = false;
     Sim.cameraActive = false;
     dirSpotlight.intensity = 0.0;
 
@@ -1560,36 +1514,8 @@ async function executeSimulationStep(targetTime, dt) {
     document.getElementById('cam-fps-pill').className = 'pill';
   }
 
-  // 4. Update Physical Pan Servo: smooth slew towards commanded target.
-  // Tilt is V1 hardware-locked at 0° — firmware never writes to tilt PWM.
-  const effectiveDt = Math.max(0.05, Math.min(0.2, dt));
-  const maxStep = Sim.slewRate * effectiveDt;
-
-  const panDiff = Sim.targetPan - Sim.currentPan;
-  if (Math.abs(panDiff) <= maxStep) Sim.currentPan = Sim.targetPan;
-  else Sim.currentPan += Math.sign(panDiff) * maxStep;
-
-  // Tilt always 0 in V1
-  Sim.currentTilt = 0.0;
-  Sim.targetTilt  = 0.0;
-
-  // Apply to 3D gimbal: only pan rotates; tilt head is stationary
-  panTurret.rotation.y = THREE.MathUtils.degToRad(-Sim.currentPan);
-  tiltHead.rotation.x  = 0;  // V1: tilt servo locked at 0°
-
-  // Update Outgoing Packet telemetry
-  document.getElementById('pkt-pan').textContent  = Sim.currentPan.toFixed(2) + '°';
-  document.getElementById('pkt-tilt').textContent = '0.00° (fixed — V1)';
-
-  // Kinematics panel — pan slew only
-  const remainingLag = Math.abs(Sim.targetPan - Sim.currentPan);
-  document.getElementById('act-pan').textContent  = Sim.currentPan.toFixed(2) + '°';
-  document.getElementById('act-tilt').textContent = '0.00° (fixed)';
-  document.getElementById('act-lag').textContent  = remainingLag.toFixed(2) + '°';
-
-  const isMoving = remainingLag > 0.2;
-  document.getElementById('act-status').textContent = isMoving ? 'SLEWING TOWARDS TARGET' : 'AT TARGET (HOLDING)';
-  document.getElementById('act-status').className   = 'mv ' + (isMoving ? 'orange' : 'green');
+  // 4. Update Physical Servos (Interpolation towards Target)
+  updateServoSlew(dt);
 
   // 5. Render Sensor Frame directly using Hardware WebGL Renderer
   renderSensorFrame();
@@ -1612,48 +1538,179 @@ async function executeSimulationStep(targetTime, dt) {
   document.getElementById('sys-mode-pill').className = Sim.cameraActive ? 'pill active' : 'pill';
 }
 
-// ── Frame Processing & Backend Sync (WebSocket transport) ───────────────────
+// ── Physical Servo Slew Update ──────────────────────────────────────────────
+function updateServoSlew(dt) {
+  const effectiveDt = Math.max(0.001, Math.min(0.1, dt));
+  const maxStep = Sim.slewRate * effectiveDt;
+
+  const panDiff = Sim.targetPan - Sim.currentPan;
+  if (Math.abs(panDiff) <= maxStep) Sim.currentPan = Sim.targetPan;
+  else Sim.currentPan += Math.sign(panDiff) * maxStep;
+
+  const tiltDiff = Sim.targetTilt - Sim.currentTilt;
+  if (Math.abs(tiltDiff) <= maxStep) Sim.currentTilt = Sim.targetTilt;
+  else Sim.currentTilt += Math.sign(tiltDiff) * maxStep;
+
+  // Apply to physical 3D gimbal hierarchy (negative X tilt points downward towards ground)
+  panTurret.rotation.y = THREE.MathUtils.degToRad(-Sim.currentPan);
+  tiltHead.rotation.x = THREE.MathUtils.degToRad(-Sim.currentTilt);
+
+  // Update Outgoing Packet telemetry
+  const pktPan = document.getElementById('pkt-pan');
+  if (pktPan) pktPan.textContent = Sim.currentPan.toFixed(2) + '°';
+  const pktTilt = document.getElementById('pkt-tilt');
+  if (pktTilt) pktTilt.textContent = Sim.currentTilt.toFixed(2) + '°';
+
+  // Kinematics Slew Lag
+  const remainingLag = Math.hypot(Sim.targetPan - Sim.currentPan, Sim.targetTilt - Sim.currentTilt);
+  const actPan = document.getElementById('act-pan');
+  if (actPan) actPan.textContent = Sim.currentPan.toFixed(2) + '°';
+  const actTilt = document.getElementById('act-tilt');
+  if (actTilt) actTilt.textContent = Sim.currentTilt.toFixed(2) + '°';
+  const actLag = document.getElementById('act-lag');
+  if (actLag) actLag.textContent = remainingLag.toFixed(2) + '°';
+
+  const isMoving = remainingLag > 0.2;
+  const actStatus = document.getElementById('act-status');
+  if (actStatus) {
+    actStatus.textContent = isMoving ? 'SLEWING TOWARDS TARGET' : 'AT TARGET (HOLDING)';
+    actStatus.className = 'mv ' + (isMoving ? 'orange' : 'green');
+  }
+}
+
+// ── Decoupled Polling Engines (Push / Poll Split, HTTP fallback only) ─────────
+let servoPollTimer = null;
+let actionPollTimer = null;
+
+async function pollServoOnce() {
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  if (mode !== 'push_poll') return;
+  if (!Sim.backendOnline || !Sim.cameraActive) return;
+
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const camId = getCameraId();
+  try {
+    const res = await fetch(`${url}/servo/${encodeURIComponent(camId)}`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      const data = await res.json();
+      applyBackendResult(data);
+    }
+  } catch (_) {}
+}
+
+async function pollActionOnce() {
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  if (mode !== 'push_poll') return;
+  if (!Sim.backendOnline || !Sim.cameraActive) return;
+
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const camId = getCameraId();
+  try {
+    const res = await fetch(`${url}/action/${encodeURIComponent(camId)}`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.action && data.action !== 'none' && data.action !== 'CONTINUE_SWEEP') {
+        if (data.action === 'BARK_SOUND') {
+          playSoundFromBackend('BARK_SOUND');
+          triggerStrobeFlash(0.3);
+        } else if (data.action === 'FLASH_LIGHT') {
+          triggerStrobeFlash(1.0);
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+// Start polling engines: 80ms fast servo tracking, 400ms slow action checking (for HTTP mode)
+if (!servoPollTimer) servoPollTimer = setInterval(pollServoOnce, 80);
+if (!actionPollTimer) actionPollTimer = setInterval(pollActionOnce, 400);
+
+// ── Frame Processing & Backend Sync ─────────────────────────────────────────
 async function processFrameStep() {
   Sim.isInferring = true;
-  const capturePan  = Sim.currentPan;
+  const url = document.getElementById('cfg-url').value.replace(/\/$/, '');
+  const apiKey = document.getElementById('cfg-key').value;
+  const mode = document.getElementById('cfg-mode')?.value || 'ws';
+  const camId = getCameraId();
+  const capturePan = Sim.currentPan;
   const captureTilt = Sim.currentTilt;
 
-  // ── Path A: WebSocket connected — mirrors cameraTask in ws_client.cpp ──
-  if (Sim.backendOnline && _ws && _ws.readyState === WebSocket.OPEN) {
-    try {
-      // 1. Send metadata text frame (mirrors wsSendTXT(meta) in cameraTask)
-      wsSendText({
-        type: 'frame',
-        seq:  Sim.frameIndex,
-        pan:  parseFloat(capturePan.toFixed(2)),
-        tilt: 0.0,
-        w:    640,
-        h:    480,
-      });
+  let success = false;
 
-      // 2. Send raw JPEG binary (mirrors wsSendBIN(fb->buf, fb->len))
-      const blob = await new Promise(r => camCanvas.toBlob(r, 'image/jpeg', 0.90));
-      const arrayBuf = await blob.arrayBuffer();
-      if (_ws.readyState === WebSocket.OPEN) {
-        _ws.send(arrayBuf);
+  if (mode === 'ws') {
+    if (Sim.ws && Sim.ws.readyState === WebSocket.OPEN) {
+      try {
+        const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.85));
+        if (blob) {
+          // Text metadata first: matches ESP32-CAM ws_client.cpp cameraTask
+          const meta = {
+            type: 'frame',
+            seq: Sim.frameIndex,
+            pan: parseFloat(capturePan.toFixed(2)),
+            tilt: parseFloat(captureTilt.toFixed(2)),
+            w: 640,
+            h: 480,
+          };
+          Sim.ws.send(JSON.stringify(meta));
+          // Immediately send raw JPEG binary frame
+          Sim.ws.send(blob);
+
+          document.getElementById('pkt-status').textContent = `WS SENT (#${Sim.frameIndex}, ${(blob.size / 1024).toFixed(1)}KB)`;
+          document.getElementById('pkt-status').className = 'mv green';
+          success = true;
+        }
+      } catch (err) {
+        console.warn('WS send frame error', err);
       }
-
-      document.getElementById('pkt-status').textContent =
-        `WS SENT (#${Sim.frameIndex}, ${(arrayBuf.byteLength / 1024).toFixed(1)}KB)`;
-      document.getElementById('pkt-status').className = 'mv green';
-
-      // 3. Result arrives asynchronously via _ws.onmessage → _applyWsResult
-      // We don't block here — backend pushes back when inference completes.
-      // isInferring stays false so next frame can queue immediately.
-    } catch (err) {
-      console.warn('[SIM-WS] frame send error:', err);
     }
-    Sim.isInferring = false;
-    return;
+  } else if (Sim.backendOnline) {
+    try {
+      const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.90));
+      const fd = new FormData();
+      fd.append('camera_id', camId);
+      fd.append('pan_angle', capturePan.toString());
+      fd.append('tilt_angle', captureTilt.toString());
+      fd.append('image_width', '640');
+      fd.append('image_height', '480');
+      fd.append('seq', Sim.frameIndex.toString());
+      fd.append('image', blob, 'frame.jpg');
+
+      if (mode === 'push_poll') {
+        const res = await fetch(`${url}/frame/${encodeURIComponent(camId)}`, {
+          method: 'POST',
+          headers: { 'X-Api-Key': apiKey },
+          body: fd,
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const acc = await res.json();
+          document.getElementById('pkt-status').textContent = `PUSHED (#${acc.seq}, drop=${acc.dropped})`;
+          document.getElementById('pkt-status').className = 'mv green';
+          success = true;
+        }
+      } else {
+        const res = await fetch(`${url}/infer`, {
+          method: 'POST',
+          headers: { 'X-Api-Key': apiKey },
+          body: fd,
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          applyBackendResult(data);
+          success = true;
+        }
+      }
+    } catch (err) {
+      // Non-fatal network drop
+    }
   }
 
-  // ── Path B: No WebSocket — run local servo_math.py emulation offline ──
-  runLocalBackendMath(capturePan, captureTilt);
+  // If backend was offline or failed, run exact local servo_math.py & state.py logic
+  if (!success && (!Sim.backendOnline || mode === 'sync')) {
+    runLocalBackendMath(capturePan, captureTilt);
+  }
+
   Sim.isInferring = false;
 }
 
@@ -1747,15 +1804,15 @@ function runLocalBackendMath(capturePan, captureTilt) {
     cs.prev_bbox_center = [cx, cy];
     cs.prev_frame_ts = Sim.currentTime;
     cs.last_pan_absolute = targetPan;
-    cs.last_tilt_absolute = 0.0;  // V1: tilt always 0
+    cs.last_tilt_absolute = targetTilt;
 
-    Sim.targetPan  = targetPan;
-    Sim.targetTilt = 0.0;  // V1: tilt always 0
+    Sim.targetPan = targetPan;
+    Sim.targetTilt = targetTilt;
 
     applyBackendResult({
       phase: 'tracking',
       action: action,
-      movement: { pan_absolute: targetPan, tilt_absolute: 0.0, skip: skip },
+      movement: { pan_absolute: targetPan, tilt_absolute: targetTilt, skip: skip },
       detection: det,
       inference_ms: 88.5,
     });
@@ -1787,17 +1844,17 @@ function runLocalBackendMath(capturePan, captureTilt) {
       });
     } else {
       cs.phase = 'sweeping';
-      const sweepSeq = [[0],[30],[60],[90],[-30],[-60],[-90]];
+      const sweepSeq = [[0,0],[30,0],[60,0],[90,0],[60,10],[30,10],[0,10],[-30,10],[-60,10],[-90,10],[-60,0],[-30,0]];
       cs.sweep_step = (cs.sweep_step + 1) % sweepSeq.length;
       const sweepTarget = sweepSeq[cs.sweep_step];
 
-      Sim.targetPan  = sweepTarget[0];
-      Sim.targetTilt = 0.0;  // V1: tilt always 0
+      Sim.targetPan = sweepTarget[0];
+      Sim.targetTilt = sweepTarget[1];
 
       applyBackendResult({
         phase: 'sweeping',
         action: 'CONTINUE_SWEEP',
-        movement: { pan_absolute: sweepTarget[0], tilt_absolute: 0.0, skip: false },
+        movement: { pan_absolute: sweepTarget[0], tilt_absolute: sweepTarget[1], skip: false },
         detection: null,
         camera_state: {
           phase: 'sweeping',
@@ -1807,7 +1864,7 @@ function runLocalBackendMath(capturePan, captureTilt) {
           sweep_step: cs.sweep_step,
           prev_bbox_center: null,
           last_pan_absolute: sweepTarget[0],
-          last_tilt_absolute: 0.0,  // V1: tilt always 0
+          last_tilt_absolute: sweepTarget[1],
         },
         inference_ms: 72.0,
       });
@@ -1817,28 +1874,38 @@ function runLocalBackendMath(capturePan, captureTilt) {
 
 // ── Apply Backend Result to Inspector & Servos ──────────────────────────────
 function applyBackendResult(data) {
-  Sim.lastDetection = data.detection;
+  if (!data) return;
+
+  const pan = typeof data.pan === 'number' ? data.pan : (data.movement ? data.movement.pan_absolute : Sim.currentPan);
+  const tilt = typeof data.tilt === 'number' ? data.tilt : (data.movement ? data.movement.tilt_absolute : Sim.currentTilt);
+  const skip = typeof data.skip === 'boolean' ? data.skip : (data.movement ? Boolean(data.movement.skip) : false);
+  const action = data.action || (data.camera_state ? data.camera_state.active_action : 'none');
+  const phase = data.phase || (data.camera_state ? data.camera_state.phase : (data.detection ? 'tracking' : 'sweeping'));
+
+  data.movement = data.movement || { pan_absolute: pan, tilt_absolute: tilt, skip: skip };
+  data.action = action;
+  data.phase = phase;
+
+  Sim.lastDetection = data.detection || null;
 
   // Sync In-Memory CameraState from Backend Response
   if (data.camera_state) {
     Sim.cameraState = {
-      phase: data.camera_state.phase || data.phase || 'sweeping',
+      phase: data.camera_state.phase || phase,
       frames_without_detection: data.camera_state.frames_without_detection ?? 0,
-      active_action: data.camera_state.active_action || data.action || 'none',
+      active_action: data.camera_state.active_action || action,
       action_frames_remaining: data.camera_state.action_frames_remaining ?? 0,
       sweep_step: data.camera_state.sweep_step ?? 0,
       prev_bbox_center: data.camera_state.prev_bbox_center || (data.detection ? data.detection.bbox_center : null),
       prev_frame_ts: Sim.currentTime,
-      last_pan_absolute: data.camera_state.last_pan_absolute ?? (data.movement ? data.movement.pan_absolute : Sim.currentPan),
-      last_tilt_absolute: data.camera_state.last_tilt_absolute ?? (data.movement ? data.movement.tilt_absolute : Sim.currentTilt),
+      last_pan_absolute: data.camera_state.last_pan_absolute ?? pan,
+      last_tilt_absolute: data.camera_state.last_tilt_absolute ?? tilt,
     };
   } else {
-    Sim.cameraState.phase = data.phase || (data.detection ? 'tracking' : 'sweeping');
-    Sim.cameraState.active_action = data.action || 'none';
-    if (data.movement) {
-      Sim.cameraState.last_pan_absolute = data.movement.pan_absolute;
-      Sim.cameraState.last_tilt_absolute = data.movement.tilt_absolute;
-    }
+    Sim.cameraState.phase = phase;
+    Sim.cameraState.active_action = action;
+    Sim.cameraState.last_pan_absolute = pan;
+    Sim.cameraState.last_tilt_absolute = tilt;
     if (data.detection) {
       Sim.cameraState.frames_without_detection = 0;
       Sim.cameraState.prev_bbox_center = data.detection.bbox_center;
@@ -1862,38 +1929,37 @@ function applyBackendResult(data) {
     document.getElementById('cam-optical-state').style.color = 'var(--primary)';
 
     const isDeadzone = errHypot <= 20;
-    const isSkipped = data.movement.skip;
-    if (isSkipped) {
+    if (skip) {
       document.getElementById('math-l1').textContent = isDeadzone
         ? `Inside Center Deadzone (${errHypot}px <= 20px)`
         : `Angular Deadband (Δ < 1.5° · Hold)`;
       document.getElementById('math-l1').className = 'mv green';
-      document.getElementById('math-l3').textContent = `Hold: Pan ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
+      document.getElementById('math-l3').textContent = `Hold: ${pan.toFixed(1)}°, ${tilt.toFixed(1)}°`;
     } else {
       document.getElementById('math-l1').textContent = `Outside Deadzone (${errHypot}px > 20px)`;
       document.getElementById('math-l1').className = 'mv orange';
-      document.getElementById('math-l3').textContent = `Pan: ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
+      document.getElementById('math-l3').textContent = `Pan: ${pan.toFixed(1)}°, Tilt: ${tilt.toFixed(1)}°`;
     }
-    document.getElementById('math-l2').textContent = `Err: ${errX}px, ΔY: ${errY}px`;
+    document.getElementById('math-l2').textContent = `Err: ${errX}px, ${errY}px`;
 
-    if (!data.movement.skip) {
-      Sim.targetPan  = data.movement.pan_absolute;
-      Sim.targetTilt = 0.0;  // V1: always ignore tilt from backend
+    if (!skip) {
+      Sim.targetPan = pan;
+      Sim.targetTilt = tilt;
     }
   } else {
     document.getElementById('det-cls').textContent = 'None';
     document.getElementById('det-conf').textContent = '—';
-    if (data.phase === 'tracking') {
+    if (phase === 'tracking') {
       const fnd = Sim.cameraState.frames_without_detection || 1;
       document.getElementById('cam-optical-state').textContent = `TRACKING (HOLDING · ${fnd}/5 NO-DET)`;
       document.getElementById('cam-optical-state').style.color = 'var(--primary)';
       document.getElementById('math-l1').textContent = `Holding Target (${fnd}/5 dropped)`;
       document.getElementById('math-l1').className = 'mv green';
       document.getElementById('math-l2').textContent = 'Hysteresis / Re-acquiring';
-      document.getElementById('math-l3').textContent = `Hold: Pan ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
-      if (!data.movement.skip) {
-        Sim.targetPan  = data.movement.pan_absolute;
-        Sim.targetTilt = 0.0;  // V1: tilt locked at 0
+      document.getElementById('math-l3').textContent = `Hold: ${pan.toFixed(1)}°, ${tilt.toFixed(1)}°`;
+      if (!skip) {
+        Sim.targetPan = pan;
+        Sim.targetTilt = tilt;
       }
     } else {
       document.getElementById('cam-optical-state').textContent = 'SWEEPING PERIMETER';
@@ -1901,17 +1967,17 @@ function applyBackendResult(data) {
       document.getElementById('math-l1').textContent = 'No Detection → Sweep';
       document.getElementById('math-l1').className = 'mv';
       document.getElementById('math-l2').textContent = '—';
-      document.getElementById('math-l3').textContent = `Sweep: Pan ${data.movement.pan_absolute.toFixed(1)}° (Tilt fixed 0°)`;
-      Sim.targetPan  = data.movement.pan_absolute;
-      Sim.targetTilt = 0.0;  // V1: tilt locked at 0
+      document.getElementById('math-l3').textContent = `Sweep: ${pan.toFixed(1)}°, ${tilt.toFixed(1)}°`;
+      Sim.targetPan = pan;
+      Sim.targetTilt = tilt;
     }
   }
 
   // Deterrent Action
-  if (data.action === 'BARK_SOUND') {
+  if (action === 'BARK_SOUND') {
     playSoundFromBackend('BARK_SOUND');
     triggerStrobeFlash(0.3);
-  } else if (data.action === 'FLASH_LIGHT') {
+  } else if (action === 'FLASH_LIGHT') {
     triggerStrobeFlash(1.0);
   }
 
@@ -2035,26 +2101,12 @@ function renderSensorFrame() {
 }
 
 function triggerStrobeFlash(intensity = 1.0) {
-  // Screen flash effect
   document.getElementById('screen-strobe').classList.add('active');
-  // For FLASH_LIGHT: also pulse the 3D spotlight for 500ms to match relay behaviour
-  const isSpotPulse = intensity >= 1.0;
-  if (isSpotPulse) {
-    const relayEl = document.getElementById('relay-status');
-    dirSpotlight.intensity = 3.2;
-    if (relayEl) { relayEl.textContent = 'CLOSED (12V ON · Flash)'; relayEl.className = 'mv orange'; }
-    // Register the sim-clock window so executeSimulationStep can track it
-    Sim.spotlightPulseEndTime = Sim.currentTime + 0.5;  // 500 ms relay pulse
-    setTimeout(() => {
-      dirSpotlight.intensity = 0.0;
-      if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
-    }, 500);
-  } else {
-    // BARK_SOUND — brief visual flash only, no relay
-    dirSpotlight.intensity = 1.2 * intensity;
-    setTimeout(() => { dirSpotlight.intensity = 0.0; }, 140);
-  }
-  setTimeout(() => { document.getElementById('screen-strobe').classList.remove('active'); }, 140);
+  dirSpotlight.intensity = 3.5 * intensity;
+  setTimeout(() => {
+    document.getElementById('screen-strobe').classList.remove('active');
+    dirSpotlight.intensity = Sim.directionalLightOn ? 2.2 : 0.0;
+  }, 140);
 }
 
 // ── WebGL Main Render Loop ──────────────────────────────────────────────────
@@ -2070,6 +2122,9 @@ function renderLoop() {
     const nextTime = Sim.currentTime + dt * Sim.playbackSpeed;
     executeSimulationStep(nextTime, dt * Sim.playbackSpeed);
   }
+
+  // Update physical servos smoothly on every frame (independent of play state)
+  updateServoSlew(dt);
 
   controls.update();
 
@@ -2111,12 +2166,6 @@ function resetTime() {
   Sim.currentTilt = 0;
   Sim.targetPan = 0;
   Sim.targetTilt = 0;
-  Sim.systemActive = false;
-  Sim.lastPirTriggerTime = -1;
-  Sim.spotlightPulseEndTime = -1;
-  dirSpotlight.intensity = 0.0;
-  const relayEl = document.getElementById('relay-status');
-  if (relayEl) { relayEl.textContent = 'OPEN (STANDBY)'; relayEl.className = 'mv'; }
   Sim.cameraState.phase = 'sweeping';
   Sim.cameraState.frames_without_detection = 0;
   Sim.cameraState.active_action = 'none';
@@ -2127,15 +2176,9 @@ function resetTime() {
   Sim.cameraState.last_pan_absolute = 0.0;
   Sim.cameraState.last_tilt_absolute = 0.0;
 
-  // ── Mirrors firmware: reset + IDLE status sent on PIR timeout / re-init ──
-  wsSendText({ type: 'reset', camera_id: getCameraId() });
-  wsSendText({
-    type: 'status', state: 'IDLE',
-    message: 'Simulator reset to t=0',
-    camera_id: getCameraId(),
-    uptime_ms: Math.round(performance.now()),
-    wifi_rssi: -55, free_heap: 245000,
-  });
+  // Send backend reset and status over WebSocket
+  sendWsReset();
+  sendWsStatus('IDLE', 'Simulator Reset (t=0)');
 
   executeSimulationStep(0.0, 0.1);
 }

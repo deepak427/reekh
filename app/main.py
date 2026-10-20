@@ -78,6 +78,7 @@ logger = logging.getLogger(__name__)
 
 # ── Globals ───────────────────────────────────────────────────────────────────
 
+_START_TIME: float = time.time()
 _model: Optional[RFDETRInference] = None
 _worker_task: Optional[asyncio.Task] = None
 
@@ -166,11 +167,15 @@ def verify_api_key(x_api_key: Annotated[Optional[str], Header()] = None) -> None
 @app.get("/health", response_model=HealthResponse)
 def health():
     import cv2 as _cv2
+    import platform as _platform
     return HealthResponse(
         status="ok",
         model_loaded=_model is not None,
         opencv_version=_cv2.__version__,
         engine=_model.engine_name if _model else "not loaded",
+        architecture=_platform.machine(),
+        uptime_seconds=round(time.time() - _START_TIME, 1),
+        active_ws_connections=1 if store._ws_result_queue is not None else 0,
     )
 
 
@@ -778,7 +783,11 @@ async def monitor_stream():
 @app.get("/simulator", response_class=HTMLResponse)
 def simulator_ui():
     """Serves the 3D Agricultural Surveillance Simulator & State Inspector."""
-    for p in [Path(__file__).resolve().parent / "simulator.html", Path(__file__).resolve().parent.parent / "simulator.html"]:
+    for p in [
+        Path(__file__).resolve().parent / "web" / "simulator.html",
+        Path(__file__).resolve().parent / "simulator.html",
+        Path(__file__).resolve().parent.parent / "simulator.html",
+    ]:
         if p.exists():
             return HTMLResponse(content=p.read_text(encoding="utf-8"))
     raise HTTPException(status_code=404, detail="simulator.html not found")
@@ -787,7 +796,11 @@ def simulator_ui():
 @app.get("/monitor", response_class=HTMLResponse)
 def monitor_ui():
     """Live dashboard — Warm Agricultural Modern telemetry console for ESP32-CAM and RF-DETR inference."""
-    for p in [Path(__file__).resolve().parent / "monitor.html", Path(__file__).resolve().parent.parent / "monitor.html"]:
+    for p in [
+        Path(__file__).resolve().parent / "web" / "monitor.html",
+        Path(__file__).resolve().parent / "monitor.html",
+        Path(__file__).resolve().parent.parent / "monitor.html",
+    ]:
         if p.exists():
             return HTMLResponse(content=p.read_text(encoding="utf-8"))
     raise HTTPException(status_code=404, detail="monitor.html not found")

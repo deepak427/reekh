@@ -61,10 +61,13 @@ class InferResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    status:         str
-    model_loaded:   bool
-    opencv_version: str
-    engine:         str
+    status:                 str
+    model_loaded:           bool
+    opencv_version:         str
+    engine:                 str
+    architecture:           Optional[str]   = None
+    uptime_seconds:         Optional[float] = None
+    active_ws_connections:  int             = 0
 
 
 # ── Push / Poll decoupled ─────────────────────────────────────────────────────

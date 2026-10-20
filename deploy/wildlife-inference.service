@@ -1,5 +1,5 @@
 [Unit]
-Description=Wildlife Surveillance Inference Service (OpenCV 5.1 COOL + Graviton5)
+Description=Wildlife Surveillance Inference Service (AWS Graviton t4g.medium)
 After=network.target
 
 [Service]
@@ -9,15 +9,12 @@ Group=ubuntu
 WorkingDirectory=/home/ubuntu/inference_service
 EnvironmentFile=-/home/ubuntu/inference_service/.env
 Environment=PYTHONUNBUFFERED=1
-Environment=PATH=/opt/cool/venvs/python_3.12/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
-Environment=LD_LIBRARY_PATH=/opt/cool/cpp_sdk/lib:/opt/ffmpeg/lib
-ExecStart=/opt/cool/venvs/python_3.12/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+ExecStart=/home/ubuntu/inference_service/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 Restart=always
 RestartSec=3
 StandardOutput=journal
 StandardError=journal
 
-# Limits & safety
 LimitNOFILE=65536
 TimeoutStopSec=10
 

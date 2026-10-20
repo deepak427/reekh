@@ -1,0 +1,18 @@
+{
+  "timestamp": 1792495160.460686,
+  "platform": "Windows-10-10.0.22631-SP0",
+  "machine": "AMD64",
+  "opencv_version": "5.0.0",
+  "engine_name": "ENGINE_NEW",
+  "model": "inference_model.onnx",
+  "input_size": 576,
+  "iterations": 30,
+  "init_warmup_ms": 1642.03,
+  "mean_ms": 538.47,
+  "median_ms": 534.25,
+  "min_ms": 522.45,
+  "p95_ms": 563.67,
+  "p99_ms": 585.95,
+  "max_ms": 593.5,
+  "throughput_fps": 1.86
+}
