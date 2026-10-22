@@ -55,7 +55,7 @@ from app.config import (
     MODEL_PATH,
 )
 from app.inference import RFDETRInference
-from app.jev_client import decide_action
+from app.jev_client import decide_action, get_actions_for_species
 import app.logging_service as svclog
 from app.ws_handler import handle_camera_ws, set_sse_broadcast
 from app.schemas import (
@@ -603,15 +603,21 @@ async def _process_frame(frame: FrameData) -> None:
 
     # Push result directly to ESP32 / Simulator over WebSocket (if connected).
     # This replaces the poll pattern — ESP32 no longer needs GET /servo or GET /action.
+    _, secondary_actions = (
+        get_actions_for_species(detection_out.class_name)
+        if detection_out is not None
+        else (action, [])
+    )
     ws_payload = {
-        "pan":    round(movement.pan_absolute, 2),
-        "tilt":   round(movement.tilt_absolute, 2),
-        "skip":   movement.skip,
-        "action": action.value,
-        "phase":  phase.value,
-        "seq":    frame.seq,
-        "movement": movement.model_dump(),
-        "camera_state": store.camera_state.to_dict(),
+        "pan":               round(movement.pan_absolute, 2),
+        "tilt":              round(movement.tilt_absolute, 2),
+        "skip":              movement.skip,
+        "action":            action.value,
+        "secondary_actions": secondary_actions,   # e.g. ["FLASH_LIGHT", "ALERT_OWNER"]
+        "phase":             phase.value,
+        "seq":               frame.seq,
+        "movement":          movement.model_dump(),
+        "camera_state":      store.camera_state.to_dict(),
     }
     if detection_out is not None:
         ws_payload["detection"] = detection_out.model_dump()

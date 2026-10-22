@@ -17,10 +17,21 @@ class Phase(str, Enum):
 
 class Action(str, Enum):
     none           = "none"
-    bark_sound     = "BARK_SOUND"
-    flash_light    = "FLASH_LIGHT"
-    alert_owner    = "ALERT_OWNER"
     continue_sweep = "CONTINUE_SWEEP"
+
+    # ── Deterrent sounds ──────────────────────────────────────────────────────
+    # Played through the speaker module on the ESP32 hardware.
+    # Firmware maps each value to the corresponding audio file on the SD card.
+
+    sound_human_shout    = "SOUND_HUMAN_SHOUT"     # apex predators: tiger, leopard
+    sound_dog_bark       = "SOUND_DOG_BARK"         # bear, boar, fox, raccoon dog, leopard cat
+    sound_wolf_howl      = "SOUND_WOLF_HOWL"        # deer: sika, roe, musk
+    sound_raptor_screech = "SOUND_RAPTOR_SCREECH"   # small mustelids + hare: sable, weasel, marten, badger
+    sound_friendly_voice = "SOUND_FRIENDLY_VOICE"   # domestic / pet: dog, cow
+
+    # ── Light + owner alert ───────────────────────────────────────────────────
+    flash_light  = "FLASH_LIGHT"    # high-intensity strobe (combined with sound for apex predators)
+    alert_owner  = "ALERT_OWNER"    # silent push notification to owner
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
