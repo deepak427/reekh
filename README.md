@@ -144,50 +144,38 @@ docker compose logs -f
 
 ---
 
-## Quickstart & Verification Tools
+## Local Quickstart
 
-### 1. Verify Installation (`verify_installation.py`)
-Self-contained environment check. Verifies Python runtime, OpenCV 5 DNN engine, model file integrity, and 4-layer kinematics math in seconds:
 ```bash
-python verify_installation.py
-```
-*Can be run both locally and on EC2.*
+# 1. Create venv and install pinned dependencies
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-### 2. Automated Test Suite (`run_tests.py`)
-Runs 15 automated unit and integration tests covering OpenCV 5 forward pass, kinematics math, WebSocket handshake, and API endpoints (uses standard library `unittest` — zero extra dependencies required):
-```bash
-python run_tests.py
-```
-*Can be run both locally and on EC2.*
+# 2. Configure environment
+cp .env.example .env
+# Edit .env — set API_KEY at minimum
 
-### 3. OpenCV 5 Performance Benchmark (`benchmark_opencv5.py`)
+# 3. Verify OpenCV 5 engine + model + servo math
+python verify_installation.py    # all 5 checks should print PASS
 
-#### What this script does:
-- Loads the RF-DETR ONNX model through OpenCV 5 DNN and logs the active engine name.
-- Measures cold-start initialization and warmup forward pass time.
-- Runs N timed forward passes (default: 50) on a representative 640×480 frame.
-- Calculates statistics: **Mean latency**, **Median (p50)**, **Min/Max**, **95th percentile (p95)**, **99th percentile (p99)**, and **Throughput (FPS)**.
-- Automatically exports machine-readable results to `benchmark_results.json`.
+# 4. Run automated test suite (zero external deps)
+python run_tests.py              # 15 tests, all should pass
 
-#### How to run locally:
-```bash
-# In local inference_service virtual environment:
-python benchmark_opencv5.py --iterations 30
+# 5. Benchmark RF-DETR latency on your hardware
+python benchmark_opencv5.py --iterations 30   # exports benchmark_results.json
+
+# 6. Start the service
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-#### How to run on AWS EC2 (t4g.medium):
-```bash
-source .venv/bin/activate
-python benchmark_opencv5.py --iterations 50 --output benchmark_graviton.json
-```
+Open in browser:
+- `/simulate` — 3D digital twin, trigger detections without hardware
+- `/monitor`  — live telemetry dashboard
+- `/health`   — engine name, model status, uptime
 
-### 4. Start Local Development Server
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-- **3D Digital Twin Simulator**: [http://localhost:8000/simulate](http://localhost:8000/simulate)
-- **Live Telemetry Console**: [http://localhost:8000/monitor](http://localhost:8000/monitor)
-- **Service Health & Diagnostics**: [http://localhost:8000/health](http://localhost:8000/health)
+On AWS Graviton t4g.medium, step 5 should report **80–150ms mean latency, 6–12 FPS**.
+To benchmark on EC2: `python benchmark_opencv5.py --iterations 50 --output benchmark_graviton.json`
 
 ---
 
