@@ -238,7 +238,7 @@ input:focus, select:focus {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #252b23;
+  background: #1a2118;
   position: relative;
 }
 .viewport-split {
@@ -259,6 +259,7 @@ input:focus, select:focus {
 .scene-overlay-badge {
   position: absolute; top: 12px; left: 12px;
   background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(6px);
   border: 2px solid var(--border); border-radius: 99px;
   padding: 4px 12px; font-size: 11px; font-weight: 800;
   color: var(--text); box-shadow: var(--shadow); z-index: 5;
@@ -267,6 +268,7 @@ input:focus, select:focus {
 .pir-badge {
   position: absolute; top: 12px; right: 12px;
   background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(6px);
   border: 2px solid var(--border); border-radius: 99px;
   padding: 4px 12px; font-size: 11px; font-weight: 800;
   color: var(--text-muted); box-shadow: var(--shadow); z-index: 5;
@@ -274,6 +276,42 @@ input:focus, select:focus {
 }
 .pir-badge.triggered {
   background: #fbeae8; border-color: #f1b3af; color: var(--red);
+}
+
+/* Floating 3D Camera & Environment Bar */
+.scene-cam-toolbar {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 6;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(6px);
+  border: 2px solid var(--border);
+  border-radius: 99px;
+  padding: 4px 8px;
+  box-shadow: var(--shadow);
+}
+.cam-preset-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.cam-preset-btn:hover {
+  color: var(--text);
+  background: var(--bg-tint);
+}
+.cam-preset-btn.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 /* Camera Sensor Viewport (640x480) */
@@ -450,7 +488,7 @@ pre.state-box {
     <a href="/simulate" class="nav-link active">3D Simulator</a>
   </nav>
 
-  <div class="header-actions">
+  <div class="header-actions" style="margin-left:auto;">
     <span style="font-size:11px; font-weight:700; color:var(--text-dim); font-family:var(--font-mono);">OpenCV 5 DNN &bull; RF-DETR</span>
   </div>
 </header>
@@ -467,7 +505,10 @@ pre.state-box {
 
       <!-- 17 Species Selection -->
       <div class="card">
-        <div class="card-head">Wild Animal Species (17 Classes)</div>
+        <div class="card-head">
+          <span>Wild Animal Species (17 Classes)</span>
+          <span style="font-size:10px; color:var(--green); font-weight:800;">3D RIGGED</span>
+        </div>
         <div class="field">
           <label>Species</label>
           <select id="sel-species" onchange="onSpeciesChange(this.value)">
@@ -489,6 +530,9 @@ pre.state-box {
             <option value="WildBoar">Wild Boar (Class 15)</option>
             <option value="Y-T-Marten">Yellow-Throated Marten (Class 16)</option>
           </select>
+        </div>
+        <div id="species-bio-note" style="font-size:11px; color:var(--text-muted); line-height:1.4; margin-top:6px; padding-top:6px; border-top:1px dashed var(--border);">
+          <strong>Panthera pardus orientalis:</strong> Articulated 3D feline rig with procedural rosette pelt, stalking gait &amp; reflective tapetum eyes.
         </div>
       </div>
 
@@ -578,6 +622,15 @@ pre.state-box {
         </div>
         <div class="pir-badge" id="pir-hud-badge">
           <span>PIR Standby · Camera Sleeping</span>
+        </div>
+
+        <!-- Interactive Camera Angle & Lighting Presets -->
+        <div class="scene-cam-toolbar">
+          <button type="button" class="cam-preset-btn active" id="cam-btn-orbit" onclick="setCameraPreset('orbit')">Orbit Overview</button>
+          <button type="button" class="cam-preset-btn" id="cam-btn-animal" onclick="setCameraPreset('animal')">Animal Close-Up</button>
+          <button type="button" class="cam-preset-btn" id="cam-btn-pole" onclick="setCameraPreset('pole')">Gimbal Over-Shoulder</button>
+          <span style="width:1px; height:14px; background:var(--border);"></span>
+          <button type="button" class="cam-preset-btn" id="cam-btn-env" onclick="toggleLightingEnv()">☀ Golden Daylight</button>
         </div>
       </div>
 
@@ -773,50 +826,105 @@ pre.state-box {
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════ -->
-<!-- APPLICATION LOGIC: PRISTINE SENSOR RENDERING, THREE.JS 3D SCENE & SYNC -->
+<!-- APPLICATION LOGIC: PHOTOREALISTIC 3D SCENE, 17 ARTICULATED ANIMALS & SYNC -->
 <!-- ════════════════════════════════════════════════════════════════════════ -->
 <script>
-// ── Web Audio Deterrent Synthesizer ──────────────────────────────────────────
+// ── DFPlayer Mini Sound System (Hardware MP3 & Web Audio Fallback) ─────────
 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 let audioEngine = null;
 let _audioTimer = null;
+const acousticRingWaves = []; // 3D visual sonic waves on deterrent fire
+
+const DFPLAYER_TRACK_MAP = {
+  'SOUND_HUMAN_SHOUT':   { track: '0001.mp3', num: 1, name: 'HUMAN SHOUT' },
+  'SOUND_DOG_BARK':      { track: '0002.mp3', num: 2, name: 'DOG BARK' },
+  'BARK_SOUND':          { track: '0002.mp3', num: 2, name: 'DOG BARK' },
+  'SOUND_WOLF_HOWL':     { track: '0003.mp3', num: 3, name: 'WOLF HOWL' },
+  'SOUND_RAPTOR_SCREECH': { track: '0004.mp3', num: 4, name: 'RAPTOR SCREECH' },
+  'SOUND_FRIENDLY_VOICE': { track: '0005.mp3', num: 5, name: 'FRIENDLY VOICE' },
+};
+
+// High-dB files: keep volume low (0.20) for listening safety
+const AUDIO_VOLUME = 0.20;
+const _audioCache = {};
+let _lastSoundAction = null;
+let _lastSoundTime = -999;
+
+function getTrackUrl(trackFile) {
+  if (window.location.protocol.startsWith('http')) {
+    return `/sounds/${trackFile}`;
+  }
+  return `./${trackFile}`;
+}
+
+function playSynthFallback(actionType) {
+  try {
+    if (!audioEngine) audioEngine = new AudioContextClass();
+    if (audioEngine.state === 'suspended') audioEngine.resume();
+    const t = audioEngine.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const osc = audioEngine.createOscillator();
+      const gain = audioEngine.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(170 - i * 22, t + i * 0.12);
+      osc.frequency.exponentialRampToValueAtTime(45, t + i * 0.12 + 0.09);
+
+      gain.gain.setValueAtTime(0.15, t + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.01, t + i * 0.12 + 0.09);
+
+      osc.connect(gain);
+      gain.connect(audioEngine.destination);
+      osc.start(t + i * 0.12);
+      osc.stop(t + i * 0.12 + 0.1);
+    }
+  } catch (e) {
+    console.warn('Audio fallback note:', e);
+  }
+}
+
 function playSoundFromBackend(actionType) {
+  const info = DFPLAYER_TRACK_MAP[actionType] || DFPLAYER_TRACK_MAP['SOUND_DOG_BARK'];
   const pill = document.getElementById('audio-status-pill');
   if (pill) {
-    pill.textContent = 'TRANSMITTING';
+    pill.textContent = `T${info.num}: ${info.name}`;
     pill.className = 'pill active';
     clearTimeout(_audioTimer);
     _audioTimer = setTimeout(() => {
       pill.textContent = 'STANDBY';
       pill.className = 'pill';
-    }, 1200);
+    }, 2200);
   }
 
+  // Spawn 3D acoustic rings from speaker horn
+  spawnAcousticWaveRing();
+
   if (!document.getElementById('chk-audio').checked) return;
+
+  const now = performance.now();
+  if (_lastSoundAction === actionType && (now - _lastSoundTime) < 1800) {
+    return;
+  }
+  _lastSoundAction = actionType;
+  _lastSoundTime = now;
+
   try {
-    if (!audioEngine) audioEngine = new AudioContextClass();
-    if (audioEngine.state === 'suspended') audioEngine.resume();
-    const t = audioEngine.currentTime;
-
-    if (actionType === 'BARK_SOUND') {
-      for (let i = 0; i < 3; i++) {
-        const osc = audioEngine.createOscillator();
-        const gain = audioEngine.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(170 - i * 22, t + i * 0.12);
-        osc.frequency.exponentialRampToValueAtTime(45, t + i * 0.12 + 0.09);
-
-        gain.gain.setValueAtTime(0.3, t + i * 0.12);
-        gain.gain.exponentialRampToValueAtTime(0.01, t + i * 0.12 + 0.09);
-
-        osc.connect(gain);
-        gain.connect(audioEngine.destination);
-        osc.start(t + i * 0.12);
-        osc.stop(t + i * 0.12 + 0.1);
-      }
+    const soundUrl = getTrackUrl(info.track);
+    if (!_audioCache[info.track]) {
+      const a = new Audio(soundUrl);
+      a.volume = AUDIO_VOLUME;
+      _audioCache[info.track] = a;
+    }
+    const audio = _audioCache[info.track];
+    audio.volume = AUDIO_VOLUME;
+    audio.currentTime = 0;
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(e => {
+        playSynthFallback(actionType);
+      });
     }
   } catch (e) {
-    console.warn('Audio note:', e);
+    playSynthFallback(actionType);
   }
 }
 
@@ -841,9 +949,10 @@ const Sim = {
   targetTilt: 0.0,
   slewRate: 280.0, // deg/sec physical servo speed
 
-  // Wildlife Target
+  // Wildlife Target (y=0.45 is torso center for sensorCam projection)
   species: 'Leopard',
   animalPos: new THREE.Vector3(-4.0, 0.45, -10.0), // starts outside 8m at t=0
+  animalHeading: 0.55,
   animalSpeed: 1.8,
   isFleeing: false,
 
@@ -866,34 +975,42 @@ const Sim = {
   backendOnline: false,
   ws: null,
   wsConnected: false,
+
+  // View & Environment Presets
+  camPreset: 'orbit',
+  duskMode: false,
 };
 
-// ── Three.js 3D Virtual Scene Setup ──────────────────────────────────────────
+// ── Three.js 3D Virtual Scene Setup (PBR + ToneMapping + Soft Shadows) ───────
 const sceneBox = document.getElementById('scene3d-box');
 const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xc8d9eb);
+scene.fog = new THREE.FogExp2(0xc8d9eb, 0.012);
 
-// Warm soft sky background (no heavy fog that washes out camera)
-scene.background = new THREE.Color(0xdce7da);
-
-// External Camera & OrbitControls (sees layer 0 and layer 1)
-const externalCam = new THREE.PerspectiveCamera(45, sceneBox.clientWidth / sceneBox.clientHeight, 0.1, 100);
-externalCam.position.set(0, 3.2, 7.5);
+// External Camera & OrbitControls (sees layer 0, layer 1 helpers, layer 2 hardware)
+const externalCam = new THREE.PerspectiveCamera(42, sceneBox.clientWidth / sceneBox.clientHeight, 0.1, 160);
+externalCam.position.set(-2.4, 3.3, 6.2);
 externalCam.layers.enable(0);
-externalCam.layers.enable(1); // sees helpers / PIR cone
+externalCam.layers.enable(1); // sees helpers / PIR cone / volumetric beam
 externalCam.layers.enable(2); // sees hardware mount & servos
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
 renderer.setSize(sceneBox.clientWidth, sceneBox.clientHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.outputEncoding = THREE.sRGBEncoding;
 sceneBox.appendChild(renderer.domElement);
 
 const controls = new THREE.OrbitControls(externalCam, renderer.domElement);
 controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.maxPolarAngle = Math.PI / 2 - 0.05;
-controls.target.set(0, 1.2, 0);
+controls.dampingFactor = 0.07;
+controls.maxPolarAngle = Math.PI / 2 - 0.03;
+controls.minDistance = 1.0;
+controls.maxDistance = 38.0;
+controls.target.set(-0.5, 0.9, -4.5);
 
 // Hardware WebGL RenderTarget for ESP32-CAM Sensor View (Direct GPU Render via primary renderer)
 const camCanvas = document.getElementById('cam-canvas');
@@ -909,120 +1026,452 @@ const rowBytes = 640 * 4;
 
 // ESP32-CAM Sensor Camera (OV2640 pinhole: 50° VFOV / 66° HFOV)
 // Layers: sensorCam ONLY sees Layer 0 (the real world), NEVER wireframe helpers or mount body!
-const sensorCam = new THREE.PerspectiveCamera(50.0, 640 / 480, 0.1, 100);
+const sensorCam = new THREE.PerspectiveCamera(50.0, 640 / 480, 0.1, 120);
 sensorCam.layers.set(0);
 
-// ── Environment Lighting ─────────────────────────────────────────────────────
-const ambLight = new THREE.HemisphereLight(0xfffaed, 0x5a6d54, 0.75);
+// ── Procedural Environment Textures (100% Untainted Offscreen Canvas) ────────
+function createProceduralGroundTexture() {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 512;
+  const ctx = c.getContext('2d');
+
+  // Rich organic meadow & soil base
+  ctx.fillStyle = '#4a6b3b';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Subtle organic patches of clover, dry grass, and rich loam
+  for (let i = 0; i < 450; i++) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    const r = 10 + Math.random() * 38;
+    const g = ctx.createRadialGradient(x, y, 2, x, y, r);
+    const tone = Math.random();
+    if (tone < 0.35) {
+      g.addColorStop(0, 'rgba(62, 92, 45, 0.35)');
+      g.addColorStop(1, 'rgba(62, 92, 45, 0)');
+    } else if (tone < 0.7) {
+      g.addColorStop(0, 'rgba(92, 118, 56, 0.28)');
+      g.addColorStop(1, 'rgba(92, 118, 56, 0)');
+    } else {
+      g.addColorStop(0, 'rgba(84, 72, 48, 0.25)');
+      g.addColorStop(1, 'rgba(84, 72, 48, 0)');
+    }
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Thousands of fine grass blades
+  for (let i = 0; i < 8500; i++) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    const h = 3 + Math.random() * 6;
+    const tilt = (Math.random() - 0.5) * 3;
+    ctx.strokeStyle = i % 3 === 0 ? '#5c8244' : (i % 3 === 1 ? '#3b572e' : '#739150');
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + tilt, y - h);
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(16, 16);
+  return tex;
+}
+
+function createProceduralSoilTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#3d2e21';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Ploughed furrow lines & soil granules
+  for (let y = 0; y < 256; y += 8) {
+    ctx.fillStyle = y % 16 === 0 ? 'rgba(28, 20, 14, 0.45)' : 'rgba(78, 60, 44, 0.35)';
+    ctx.fillRect(0, y, 256, 4);
+  }
+  for (let i = 0; i < 2400; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    ctx.fillStyle = Math.random() > 0.5 ? '#2a1f16' : '#574332';
+    ctx.fillRect(x, y, 2, 2);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(12, 2);
+  return tex;
+}
+
+function createProceduralWoodTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#6e4f35';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let x = 0; x < 256; x += 2) {
+    const v = Math.sin(x * 0.15) * 12 + (Math.random() - 0.5) * 10;
+    ctx.fillStyle = v > 0 ? 'rgba(42, 28, 16, 0.22)' : 'rgba(135, 98, 68, 0.18)';
+    ctx.fillRect(x, 0, 2, 256);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createSkyDomeTexture(isDusk = false) {
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  if (!isDusk) {
+    grad.addColorStop(0.0, '#4a7bb0');
+    grad.addColorStop(0.45, '#8ab4dc');
+    grad.addColorStop(0.82, '#d8e6f2');
+    grad.addColorStop(1.0, '#e8ece2');
+  } else {
+    grad.addColorStop(0.0, '#131b2e');
+    grad.addColorStop(0.45, '#2b3954');
+    grad.addColorStop(0.78, '#6e4c52');
+    grad.addColorStop(1.0, '#c27a55');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 512, 256);
+
+  // Soft atmospheric clouds
+  ctx.fillStyle = isDusk ? 'rgba(255, 180, 140, 0.12)' : 'rgba(255, 255, 255, 0.28)';
+  for (let i = 0; i < 35; i++) {
+    const cx = Math.random() * 512;
+    const cy = 90 + Math.random() * 90;
+    const rx = 25 + Math.random() * 60;
+    const ry = 6 + Math.random() * 14;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  return tex;
+}
+
+// ── Environment Lighting & Sky Dome ──────────────────────────────────────────
+const ambLight = new THREE.HemisphereLight(0xfffcf2, 0x4b5e40, 0.78);
+ambLight.layers.enable(0);
+ambLight.layers.enable(2);
 scene.add(ambLight);
 
-const sunLight = new THREE.DirectionalLight(0xfff6dd, 0.85);
-sunLight.position.set(12, 16, 10);
+const sunLight = new THREE.DirectionalLight(0xfff3d6, 1.15);
+sunLight.position.set(14, 22, 12);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 1024;
-sunLight.shadow.mapSize.height = 1024;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 1.0;
+sunLight.shadow.camera.far = 55.0;
+const dCam = 18;
+sunLight.shadow.camera.left = -dCam;
+sunLight.shadow.camera.right = dCam;
+sunLight.shadow.camera.top = dCam;
+sunLight.shadow.camera.bottom = -dCam;
+sunLight.shadow.bias = -0.0005;
+sunLight.layers.enable(0);
+sunLight.layers.enable(2);
 scene.add(sunLight);
 
-// Ground (Soft cartoonish farm terrain)
-const groundGeo = new THREE.PlaneGeometry(60, 60, 16, 16);
+// Subtle fill light from opposite sky hemisphere so fur detail is always crisp
+const fillLight = new THREE.DirectionalLight(0xc4d8f2, 0.35);
+fillLight.position.set(-12, 10, -14);
+fillLight.layers.enable(0);
+fillLight.layers.enable(2);
+scene.add(fillLight);
+
+// Sky Dome (Layer 0)
+const skyGeo = new THREE.SphereGeometry(95, 32, 20);
+const skyMat = new THREE.MeshBasicMaterial({
+  map: createSkyDomeTexture(false),
+  side: THREE.BackSide,
+  depthWrite: false,
+});
+const skyDome = new THREE.Mesh(skyGeo, skyMat);
+skyDome.layers.set(0);
+scene.add(skyDome);
+
+// Ground Terrain (Photorealistic textured meadow with subtle perimeter elevation)
+const groundTex = createProceduralGroundTexture();
+const groundGeo = new THREE.PlaneGeometry(110, 110, 64, 64);
+const posAttr = groundGeo.attributes.position;
+for (let i = 0; i < posAttr.count; i++) {
+  const vx = posAttr.getX(i);
+  const vy = posAttr.getY(i); // maps to world Z after rotation
+  const distFromCenter = Math.hypot(vx, vy + 5);
+  // Keep central crop & path zone (-14..14, -15..4) perfectly flat at y=0 for accurate paw placement
+  if (distFromCenter > 15.5) {
+    const hill = Math.sin(vx * 0.14) * Math.cos(vy * 0.14) * 0.45 + Math.max(0, (distFromCenter - 15.5) * 0.06);
+    posAttr.setZ(i, hill);
+  }
+}
+groundGeo.computeVertexNormals();
+
 const groundMat = new THREE.MeshStandardMaterial({
-  color: 0x6e9b5f,  // soft grass green
-  roughness: 0.85,
-  metalness: 0.05,
+  map: groundTex,
+  bumpMap: groundTex,
+  bumpScale: 0.025,
+  roughness: 0.88,
+  metalness: 0.02,
 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
+ground.layers.set(0);
 scene.add(ground);
 
-// Crop rows (stylized soft ridges)
-const cropMat = new THREE.MeshStandardMaterial({ color: 0x567e49, roughness: 0.9 });
-for (let z = -12; z <= -3; z += 1.8) {
-  const row = new THREE.Mesh(new THREE.BoxGeometry(32, 0.15, 0.8), cropMat);
-  row.position.set(0, 0.08, z);
-  row.receiveShadow = true;
-  scene.add(row);
-}
+// Tilled Crop Rows + Low-Profile 3D Leafy Agricultural Plants (Layer 0)
+const soilTex = createProceduralSoilTexture();
+const soilMat = new THREE.MeshStandardMaterial({
+  map: soilTex,
+  bumpMap: soilTex,
+  bumpScale: 0.03,
+  roughness: 0.92,
+});
+const leafMatDark = new THREE.MeshStandardMaterial({ color: 0x3b6e2c, roughness: 0.65, side: THREE.DoubleSide });
+const leafMatLight = new THREE.MeshStandardMaterial({ color: 0x528c3a, roughness: 0.6, side: THREE.DoubleSide });
 
-// Perimeter Fence with wooden posts
-const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8b6540, roughness: 0.8 });
-for (let x = -18; x <= 18; x += 3.5) {
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.09, 1.4, 10), fenceMat);
-  post.position.set(x, 0.7, -13);
+const cropGroup = new THREE.Group();
+for (let z = -12.0; z <= -3.0; z += 1.8) {
+  // Raised tilled soil ridge
+  const ridgeGeo = new THREE.BoxGeometry(30, 0.11, 0.68);
+  const ridge = new THREE.Mesh(ridgeGeo, soilMat);
+  ridge.position.set(0, 0.055, z);
+  ridge.receiveShadow = true;
+  ridge.castShadow = true;
+  ridge.layers.set(0);
+  cropGroup.add(ridge);
+
+  // Leafy low-profile soybean/cabbage crop bushes along the ridge (height ~ 0.18m so animal is never occluded)
+  for (let x = -13.5; x <= 13.5; x += 0.95) {
+    const plant = new THREE.Group();
+    plant.position.set(x + (Math.random() - 0.5) * 0.15, 0.11, z + (Math.random() - 0.5) * 0.12);
+
+    const numLeaves = 5;
+    for (let l = 0; l < numLeaves; l++) {
+      const ang = (l / numLeaves) * Math.PI * 2 + (x * 0.7);
+      const leafGeo = new THREE.ConeGeometry(0.11, 0.22, 5);
+      leafGeo.scale(1.0, 1.0, 0.35);
+      const leaf = new THREE.Mesh(leafGeo, l % 2 === 0 ? leafMatDark : leafMatLight);
+      leaf.position.set(Math.cos(ang) * 0.07, 0.07, Math.sin(ang) * 0.07);
+      leaf.rotation.z = -Math.cos(ang) * 0.55;
+      leaf.rotation.x = Math.sin(ang) * 0.55;
+      leaf.castShadow = true;
+      leaf.receiveShadow = true;
+      leaf.layers.set(0);
+      plant.add(leaf);
+    }
+    cropGroup.add(plant);
+  }
+}
+scene.add(cropGroup);
+
+// Perimeter Wooden Fence with Rails, Insulators & Tension Wires + Background Pine/Oak Trees
+const woodTex = createProceduralWoodTexture();
+const fenceMat = new THREE.MeshStandardMaterial({
+  map: woodTex,
+  bumpMap: woodTex,
+  bumpScale: 0.02,
+  roughness: 0.82,
+});
+const wireMat = new THREE.MeshStandardMaterial({ color: 0x707880, metalness: 0.7, roughness: 0.35 });
+
+const envPropsGroup = new THREE.Group();
+for (let x = -18; x <= 18; x += 3.0) {
+  // Vertical weathered timber post
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 1.45, 12), fenceMat);
+  post.position.set(x, 0.725, -13.2);
   post.castShadow = true;
-  scene.add(post);
+  post.receiveShadow = true;
+  post.layers.set(0);
+  envPropsGroup.add(post);
+
+  // Chamfered post cap
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.095, 0.08, 12), fenceMat);
+  cap.position.set(x, 1.49, -13.2);
+  cap.layers.set(0);
+  envPropsGroup.add(cap);
+}
+// Horizontal wooden top rail & steel fence wires
+const topRail = new THREE.Mesh(new THREE.BoxGeometry(36.2, 0.07, 0.05), fenceMat);
+topRail.position.set(0, 1.25, -13.12);
+topRail.castShadow = true;
+topRail.layers.set(0);
+envPropsGroup.add(topRail);
+
+const midRail = new THREE.Mesh(new THREE.BoxGeometry(36.2, 0.07, 0.05), fenceMat);
+midRail.position.set(0, 0.75, -13.12);
+midRail.castShadow = true;
+midRail.layers.set(0);
+envPropsGroup.add(midRail);
+
+for (const wy of [0.42, 0.98]) {
+  const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 36.2, 6), wireMat);
+  wire.rotation.z = Math.PI / 2;
+  wire.position.set(0, wy, -13.12);
+  wire.layers.set(0);
+  envPropsGroup.add(wire);
 }
 
-// ── Physical Hardware Mount Assembly ─────────────────────────────────────────
+// Background Treeline & Rocks beyond the fence (z = -16 to -26)
+const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4d3828, roughness: 0.9 });
+const pineMat1 = new THREE.MeshStandardMaterial({ color: 0x2d4c2b, roughness: 0.8 });
+const pineMat2 = new THREE.MeshStandardMaterial({ color: 0x385e34, roughness: 0.78 });
+const rockMat = new THREE.MeshStandardMaterial({ color: 0x6e6b64, roughness: 0.85 });
+
+for (let i = 0; i < 28; i++) {
+  const tx = -26 + i * 1.9 + (Math.random() - 0.5) * 0.8;
+  const tz = -15.5 - Math.random() * 8.0;
+  const scale = 0.85 + Math.random() * 0.65;
+
+  const tree = new THREE.Group();
+  tree.position.set(tx, 0, tz);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * scale, 0.18 * scale, 1.6 * scale, 8), trunkMat);
+  trunk.position.y = 0.8 * scale;
+  trunk.castShadow = true;
+  trunk.layers.set(0);
+  tree.add(trunk);
+
+  for (let tier = 0; tier < 3; tier++) {
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry((1.15 - tier * 0.25) * scale, (1.6 - tier * 0.2) * scale, 10),
+      tier % 2 === 0 ? pineMat1 : pineMat2
+    );
+    cone.position.y = (1.6 + tier * 0.95) * scale;
+    cone.castShadow = true;
+    cone.receiveShadow = true;
+    cone.layers.set(0);
+    tree.add(cone);
+  }
+  envPropsGroup.add(tree);
+}
+
+// Scattered natural field stones near fence and edges
+for (let i = 0; i < 18; i++) {
+  const rx = (Math.random() - 0.5) * 28;
+  const rz = -12.6 - Math.random() * 2.5;
+  const rGeo = new THREE.DodecahedronGeometry(0.14 + Math.random() * 0.16, 1);
+  rGeo.scale(1.3, 0.65, 1.1);
+  const rock = new THREE.Mesh(rGeo, rockMat);
+  rock.position.set(rx, 0.06, rz);
+  rock.rotation.y = Math.random() * Math.PI;
+  rock.castShadow = true;
+  rock.receiveShadow = true;
+  rock.layers.set(0);
+  envPropsGroup.add(rock);
+}
+scene.add(envPropsGroup);
+
+// ── CAD-Grade Physical Hardware Mount Assembly (Layer 2) ─────────────────────
 const hardwareRoot = new THREE.Group();
 hardwareRoot.position.set(0, 0, 0);
 
-// Wooden surveillance pole
-const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 1.6, 12), fenceMat);
-pole.position.y = 0.8;
+const steelDarkMat = new THREE.MeshStandardMaterial({ color: 0x2b3036, metalness: 0.65, roughness: 0.35 });
+const aluMat = new THREE.MeshStandardMaterial({ color: 0x8c969e, metalness: 0.75, roughness: 0.28 });
+const enclosureMat = new THREE.MeshStandardMaterial({ color: 0xe6e4de, roughness: 0.35, metalness: 0.1 });
+
+// Concrete footing pad + Anchor bolts + Heavy Timber Surveillance Post
+const footing = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.08, 20), rockMat);
+footing.position.y = 0.04;
+footing.receiveShadow = true;
+hardwareRoot.add(footing);
+
+const baseFlange = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.21, 0.14, 16), steelDarkMat);
+baseFlange.position.y = 0.11;
+hardwareRoot.add(baseFlange);
+
+const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.135, 1.62, 16), fenceMat);
+pole.position.y = 0.81;
 pole.castShadow = true;
+pole.receiveShadow = true;
 hardwareRoot.add(pole);
 
-// Base bracket
-const baseBracket = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.24, 0.28, 0.14, 16),
-  new THREE.MeshStandardMaterial({ color: 0x3d4349, roughness: 0.6 })
-);
-baseBracket.position.y = 1.6;
+// Weatherproof NEMA Electronics & 12V Relay Junction Box on Pole
+const nemaBox = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.30, 0.14), enclosureMat);
+nemaBox.position.set(0, 0.88, 0.14);
+nemaBox.castShadow = true;
+hardwareRoot.add(nemaBox);
+
+// Relay Indicator LED on Junction Box
+const relayLedMat = new THREE.MeshBasicMaterial({ color: 0x445544 });
+const relayLedMesh = new THREE.Mesh(new THREE.SphereGeometry(0.014, 10, 10), relayLedMat);
+relayLedMesh.position.set(0.07, 0.98, 0.215);
+hardwareRoot.add(relayLedMesh);
+
+// Top Turret Mounting Collar
+const baseBracket = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.26, 0.14, 24), steelDarkMat);
+baseBracket.position.y = 1.62;
 hardwareRoot.add(baseBracket);
 
-// 1. PIR Motion Sensor (Fresnel dome lens mounted on pole facing -Z into field)
+// 1. PIR Motion Sensor (HC-SR501 PCB + Faceted Fresnel Dome facing -Z into field)
 const pirSensorRoot = new THREE.Group();
 pirSensorRoot.position.set(0, 1.35, -0.14);
 
-const pirHousing = new THREE.Mesh(
-  new THREE.BoxGeometry(0.12, 0.16, 0.08),
-  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 })
-);
+const pirHousing = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.17, 0.08), enclosureMat);
 pirSensorRoot.add(pirHousing);
 
+const pirPcb = new THREE.Mesh(
+  new THREE.BoxGeometry(0.12, 0.15, 0.015),
+  new THREE.MeshStandardMaterial({ color: 0x1d5c2e, roughness: 0.4 })
+);
+pirPcb.position.z = -0.038;
+pirSensorRoot.add(pirPcb);
+
 const pirDome = new THREE.Mesh(
-  new THREE.SphereGeometry(0.05, 12, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-  new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.2, transparent: true, opacity: 0.9 })
+  new THREE.SphereGeometry(0.052, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.18, transparent: true, opacity: 0.92 })
 );
 pirDome.rotation.x = -Math.PI / 2;
-pirDome.position.z = -0.04;
+pirDome.position.z = -0.042;
 pirSensorRoot.add(pirDome);
 
 // PIR Indicator LED
 const pirLedMat = new THREE.MeshBasicMaterial({ color: 0x4e8a56 });
-const pirLed = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), pirLedMat);
-pirLed.position.set(0, 0.055, -0.045);
+const pirLed = new THREE.Mesh(new THREE.SphereGeometry(0.016, 10, 10), pirLedMat);
+pirLed.position.set(0, 0.06, -0.048);
 pirSensorRoot.add(pirLed);
 hardwareRoot.add(pirSensorRoot);
 
 // Visible PIR detection cone in 3D (Placed on Layer 1 so only external 3D view sees it, not sensorCam!)
-const pirConeGeo = new THREE.ConeGeometry(5.2, 8.0, 20, 1, true, -Math.PI / 3, (2 * Math.PI) / 3);
-pirConeGeo.translate(0, -4.0, 0); // apex at (0, 0, 0)
-pirConeGeo.rotateX(Math.PI / 2);  // point forward along -Z into field
+const pirConeGeo = new THREE.ConeGeometry(5.2, 8.0, 24, 1, true, -Math.PI / 3, (2 * Math.PI) / 3);
+pirConeGeo.translate(0, -4.0, 0);
+pirConeGeo.rotateX(Math.PI / 2);
 const pirConeMat = new THREE.MeshBasicMaterial({
   color: 0xe5a93b,
   wireframe: true,
   transparent: true,
-  opacity: 0.18,
+  opacity: 0.16,
 });
 const pirConeMesh = new THREE.Mesh(pirConeGeo, pirConeMat);
 pirConeMesh.position.set(0, 1.35, -0.18);
-pirConeMesh.layers.set(1); // Layer 1: external camera only!
+pirConeMesh.layers.set(1);
 hardwareRoot.add(pirConeMesh);
 
 // Ground highlight for PIR zone on the grass (Layer 1: external view only)
-const pirGroundGeo = new THREE.RingGeometry(0.5, 8.0, 24, 1, Math.PI / 6, (2 * Math.PI) / 3);
+const pirGroundGeo = new THREE.RingGeometry(0.5, 8.0, 32, 1, Math.PI / 6, (2 * Math.PI) / 3);
 const pirGroundMat = new THREE.MeshBasicMaterial({
   color: 0xe5a93b,
   transparent: true,
-  opacity: 0.08,
+  opacity: 0.09,
   side: THREE.DoubleSide,
 });
 const pirGroundMesh = new THREE.Mesh(pirGroundGeo, pirGroundMat);
 pirGroundMesh.rotation.x = -Math.PI / 2;
 pirGroundMesh.position.set(0, 0.02, 0);
-pirGroundMesh.layers.set(1); // Layer 1
+pirGroundMesh.layers.set(1);
 scene.add(pirGroundMesh);
 
 // 2. Pan Turret (Yaw Axis: -90° to +90°)
@@ -1030,167 +1479,1117 @@ const panTurret = new THREE.Group();
 panTurret.position.set(0, 1.7, 0);
 hardwareRoot.add(panTurret);
 
-// Pan servo body
+// Pan servo actuator body (MG996R style anodized blue/black body)
 const panServo = new THREE.Mesh(
   new THREE.BoxGeometry(0.28, 0.18, 0.28),
-  new THREE.MeshStandardMaterial({ color: 0x3d6e8a, roughness: 0.5 })
+  new THREE.MeshStandardMaterial({ color: 0x2b5875, metalness: 0.45, roughness: 0.4 })
 );
 panServo.position.y = 0.09;
 panTurret.add(panServo);
 
-// Tilt U-Arms
-const uArmL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.38, 0.16), new THREE.MeshStandardMaterial({ color: 0x484f56 }));
-uArmL.position.set(-0.16, 0.28, 0);
+const servoSpline = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.03, 16), aluMat);
+servoSpline.position.y = 0.19;
+panTurret.add(servoSpline);
+
+// Tilt CNC Aluminum U-Arms
+const uArmBase = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.035, 0.16), aluMat);
+uArmBase.position.set(0, 0.21, 0);
+panTurret.add(uArmBase);
+
+const uArmL = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.36, 0.15), aluMat);
+uArmL.position.set(-0.165, 0.38, 0);
 panTurret.add(uArmL);
 const uArmR = uArmL.clone();
-uArmR.position.x = 0.16;
+uArmR.position.x = 0.165;
 panTurret.add(uArmR);
 
 // 3. Tilt Head (Pitch Axis: -30° to +30°)
 const tiltHead = new THREE.Group();
-tiltHead.position.set(0, 0.36, 0);
+tiltHead.position.set(0, 0.38, 0);
 panTurret.add(tiltHead);
 
-// ESP32-CAM PCB & Enclosure
-const pcb = new THREE.Mesh(
-  new THREE.BoxGeometry(0.24, 0.18, 0.08),
-  new THREE.MeshStandardMaterial({ color: 0x2e663a, roughness: 0.4 })
+// Tilt pivot bearings
+const pivotBoltL = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.06, 12), steelDarkMat);
+pivotBoltL.rotation.z = Math.PI / 2;
+pivotBoltL.position.set(-0.17, 0, 0);
+tiltHead.add(pivotBoltL);
+const pivotBoltR = pivotBoltL.clone();
+pivotBoltR.position.x = 0.17;
+tiltHead.add(pivotBoltR);
+
+// ESP32-CAM Housing & PCB
+const camCase = new THREE.Mesh(
+  new THREE.BoxGeometry(0.27, 0.20, 0.10),
+  new THREE.MeshStandardMaterial({ color: 0x22262a, roughness: 0.4, metalness: 0.3 })
 );
+tiltHead.add(camCase);
+
+const pcb = new THREE.Mesh(
+  new THREE.BoxGeometry(0.24, 0.17, 0.02),
+  new THREE.MeshStandardMaterial({ color: 0x1d5e32, roughness: 0.35 })
+);
+pcb.position.z = -0.045;
 tiltHead.add(pcb);
 
-// OV2640 Camera Lens Barrel (Facing -Z)
-const lens = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.035, 0.04, 0.06, 16),
-  new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.2, metalness: 0.8 })
+// OV2640 Multi-Element Camera Lens Barrel (Facing -Z)
+const lensBarrel = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.042, 0.048, 0.075, 24),
+  new THREE.MeshStandardMaterial({ color: 0x111315, roughness: 0.2, metalness: 0.85 })
 );
-lens.rotation.x = Math.PI / 2;
-lens.position.set(0, 0, -0.05);
-tiltHead.add(lens);
+lensBarrel.rotation.x = Math.PI / 2;
+lensBarrel.position.set(0, 0, -0.065);
+tiltHead.add(lensBarrel);
+
+const lensGlass = new THREE.Mesh(
+  new THREE.SphereGeometry(0.033, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0x18304c, metalness: 0.9, roughness: 0.08 })
+);
+lensGlass.rotation.x = -Math.PI / 2;
+lensGlass.position.set(0, 0, -0.098);
+tiltHead.add(lensGlass);
 
 // Mount Pinhole Sensor Camera (Cleanly placed in front of lens facing -Z)
 tiltHead.add(sensorCam);
-sensorCam.position.set(0, 0, -0.22); // cleanly forward, unobstructed!
+sensorCam.position.set(0, 0, -0.22);
 sensorCam.rotation.set(0, 0, 0);
 
-// 4. Directional Spotlight — COAXIAL WITH CAMERA (Facing SAME direction -Z)
-const spotCylinder = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.045, 0.05, 0.14, 16),
-  new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.3 })
+// 4. 12V High-Power Finned LED Spotlight — COAXIAL WITH CAMERA (Facing -Z)
+const spotHousing = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.055, 0.062, 0.15, 20),
+  steelDarkMat
 );
-spotCylinder.rotation.x = Math.PI / 2;
-spotCylinder.position.set(0, 0.14, -0.04);
-tiltHead.add(spotCylinder);
+spotHousing.rotation.x = Math.PI / 2;
+spotHousing.position.set(0, 0.155, -0.04);
+tiltHead.add(spotHousing);
 
-// Directional Spotlight pointing along -Z with camera (realistic intensity 2.2, NOT 18.0!)
-const dirSpotlight = new THREE.SpotLight(0xfffae0, 0, 26, Math.PI / 4.5, 0.4, 1.0);
-dirSpotlight.position.set(0, 0.14, -0.11);
-dirSpotlight.target.position.set(0, 0.14, -10.0);
+const spotEmitterMat = new THREE.MeshBasicMaterial({ color: 0x33332a });
+const spotEmitter = new THREE.Mesh(new THREE.CircleGeometry(0.048, 20), spotEmitterMat);
+spotEmitter.rotation.y = Math.PI;
+spotEmitter.position.set(0, 0.155, -0.116);
+tiltHead.add(spotEmitter);
+
+// Volumetric Light Cone Mesh (Layer 1: seen only in external 3D viewport when active)
+const volBeamGeo = new THREE.ConeGeometry(2.6, 11.0, 28, 1, true);
+volBeamGeo.translate(0, -5.5, 0);
+volBeamGeo.rotateX(Math.PI / 2);
+const volBeamMat = new THREE.MeshBasicMaterial({
+  color: 0xfff8d6,
+  transparent: true,
+  opacity: 0.0,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+});
+const volBeamMesh = new THREE.Mesh(volBeamGeo, volBeamMat);
+volBeamMesh.position.set(0, 0.155, -0.12);
+volBeamMesh.layers.set(1);
+tiltHead.add(volBeamMesh);
+
+// Directional Spotlight pointing along -Z with camera
+const dirSpotlight = new THREE.SpotLight(0xfffae0, 0, 28, Math.PI / 4.2, 0.45, 1.0);
+dirSpotlight.position.set(0, 0.155, -0.12);
+dirSpotlight.target.position.set(0, 0.155, -10.0);
 dirSpotlight.castShadow = true;
 tiltHead.add(dirSpotlight);
 tiltHead.add(dirSpotlight.target);
 
-// 5. Sound Speaker / Acoustic Horn (Mounted on side of Tilt Head facing -Z towards animal)
+// 5. Sound Speaker / Acoustic Reflex Horn (Mounted on side of Tilt Head facing -Z)
 const hornCone = new THREE.Mesh(
-  new THREE.ConeGeometry(0.065, 0.12, 16, 1, true),
-  new THREE.MeshStandardMaterial({ color: 0xb5542a, roughness: 0.6, side: THREE.DoubleSide })
+  new THREE.ConeGeometry(0.072, 0.14, 20, 1, true),
+  new THREE.MeshStandardMaterial({ color: 0xc45824, roughness: 0.4, metalness: 0.25, side: THREE.DoubleSide })
 );
 hornCone.rotation.x = Math.PI / 2;
-hornCone.position.set(0.18, 0, -0.04);
+hornCone.position.set(0.19, 0, -0.05);
 tiltHead.add(hornCone);
 
 scene.add(hardwareRoot);
 hardwareRoot.traverse(obj => {
-  if (obj.isMesh && obj !== pirConeMesh) {
+  if (obj.isMesh && obj !== pirConeMesh && obj !== volBeamMesh) {
     obj.layers.set(2);
   }
 });
 dirSpotlight.layers.enable(0);
 dirSpotlight.layers.enable(2);
 
-// ── 17 Wildlife Classes High-Detail 3D Target Generator ──────────────────────
+// Helper to spawn 3D expanding acoustic wave rings from horn speaker when deterrent fires
+function spawnAcousticWaveRing() {
+  for (let i = 0; i < 3; i++) {
+    setTimeout(() => {
+      const ringGeo = new THREE.RingGeometry(0.08, 0.13, 24);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0xff6b2b,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.layers.set(1);
+      const worldPos = new THREE.Vector3();
+      hornCone.getWorldPosition(worldPos);
+      ring.position.copy(worldPos);
+      ring.lookAt(Sim.animalPos);
+      scene.add(ring);
+      acousticRingWaves.push({ mesh: ring, age: 0 });
+    }, i * 130);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ULTRA-REALISTIC 3D ARTICULATED WILDLIFE BUILDER FOR ALL 17 SPECIES
+// ════════════════════════════════════════════════════════════════════════════
+
+const SPECIES_CATALOG = {
+  Leopard: {
+    bio: '<strong>Panthera pardus orientalis:</strong> Articulated 3D feline rig with procedural rosette pelt, stalking gait &amp; reflective tapetum eyes.',
+    archetype: 'felid',
+    scale: 1.06,
+    bodyLen: 1.18, bodyRad: 0.23, chestBulk: 1.12, legLen: 0.56, legThick: 0.068,
+    neckLen: 0.28, headScale: 1.0, snoutLen: 0.17, snoutRad: 0.095,
+    earType: 'round', earSize: 0.075, tailLen: 0.88, tailThick: 0.042,
+    baseColor: '#c98832', bellyColor: '#f2e5cf', pattern: 'rosettes', noseColor: '#b8625c', eyeColor: '#d4b235',
+  },
+  AmurTiger: {
+    bio: '<strong>Panthera tigris altaica:</strong> Massive apex felid rig with rufous-orange fur, branching black stripes, white cheek ruffs &amp; heavy musculature.',
+    archetype: 'felid',
+    scale: 1.28,
+    bodyLen: 1.28, bodyRad: 0.27, chestBulk: 1.22, legLen: 0.60, legThick: 0.085,
+    neckLen: 0.30, headScale: 1.16, snoutLen: 0.19, snoutRad: 0.115,
+    earType: 'round', earSize: 0.08, tailLen: 0.90, tailThick: 0.048,
+    baseColor: '#d66f1e', bellyColor: '#f7f3eb', pattern: 'stripes', noseColor: '#d47470', eyeColor: '#e3b82b',
+    cheekRuffs: true,
+  },
+  Badger: {
+    bio: '<strong>Meles leucurus (Asian Badger):</strong> Low-slung fossorial mustelid wedge body, coarse grizzled silver-grey coat &amp; bold black/white facial mask.',
+    archetype: 'badger',
+    scale: 0.78,
+    bodyLen: 0.98, bodyRad: 0.25, chestBulk: 1.05, legLen: 0.32, legThick: 0.065,
+    neckLen: 0.20, headScale: 0.92, snoutLen: 0.20, snoutRad: 0.075,
+    earType: 'round', earSize: 0.055, tailLen: 0.26, tailThick: 0.055,
+    baseColor: '#7c7b77', bellyColor: '#292725', pattern: 'badger', noseColor: '#1c1a19', eyeColor: '#1f1812',
+  },
+  BlackBear: {
+    bio: '<strong>Ursus thibetanus (Asiatic Black Bear):</strong> Heavy plantigrade ursine frame, dense jet-black coat, tan muzzle &amp; signature white crescent chest V-blaze.',
+    archetype: 'bear',
+    scale: 1.32,
+    bodyLen: 1.22, bodyRad: 0.34, chestBulk: 1.25, legLen: 0.56, legThick: 0.105,
+    neckLen: 0.26, headScale: 1.15, snoutLen: 0.21, snoutRad: 0.105,
+    earType: 'roundLarge', earSize: 0.105, tailLen: 0.14, tailThick: 0.05,
+    baseColor: '#19191b', bellyColor: '#1f1f22', pattern: 'moonbear', noseColor: '#2b231d', eyeColor: '#3b2818',
+  },
+  Cow: {
+    bio: '<strong>Bos taurus:</strong> Large domestic bovine with deep barrel ribcage, pied chestnut-and-white coat, curved horns, broad pink muzzle &amp; tasseled tail.',
+    archetype: 'bovine',
+    scale: 1.36,
+    bodyLen: 1.36, bodyRad: 0.33, chestBulk: 1.20, legLen: 0.68, legThick: 0.075,
+    neckLen: 0.34, headScale: 1.12, snoutLen: 0.24, snoutRad: 0.12,
+    earType: 'horizontal', earSize: 0.11, tailLen: 0.76, tailThick: 0.032,
+    baseColor: '#8c4322', bellyColor: '#f5f2eb', pattern: 'pied', noseColor: '#e09690', eyeColor: '#241810',
+    horns: true, udder: true,
+  },
+  Dog: {
+    bio: '<strong>Canis lupus familiaris:</strong> Athletic shepherd/pariah canid build, warm tan/sable coat with dark saddle, upright triangular ears &amp; bushy tail.',
+    archetype: 'canid',
+    scale: 0.94,
+    bodyLen: 1.04, bodyRad: 0.22, chestBulk: 1.15, legLen: 0.56, legThick: 0.058,
+    neckLen: 0.28, headScale: 0.98, snoutLen: 0.21, snoutRad: 0.078,
+    earType: 'pointed', earSize: 0.105, tailLen: 0.58, tailThick: 0.048,
+    baseColor: '#b87b3b', bellyColor: '#e8d5b7', pattern: 'saddle', noseColor: '#1a1817', eyeColor: '#4a2e16',
+  },
+  Hare: {
+    bio: '<strong>Lepus mandshuricus (Manchurian Hare):</strong> Hind-heavy lagomorph rig with long black-tipped ears, powerful hind legs &amp; white cottontail.',
+    archetype: 'hare',
+    scale: 0.68,
+    bodyLen: 0.78, bodyRad: 0.21, chestBulk: 0.95, legLen: 0.42, legThick: 0.052,
+    neckLen: 0.16, headScale: 0.92, snoutLen: 0.13, snoutRad: 0.075,
+    earType: 'hare', earSize: 0.26, tailLen: 0.15, tailThick: 0.065,
+    baseColor: '#9c7448', bellyColor: '#ede4d5', pattern: 'agouti', noseColor: '#c77d79', eyeColor: '#5c3c18',
+  },
+  LeopardCat: {
+    bio: '<strong>Prionailurus bengalensis (Amur Leopard Cat):</strong> Lithe wildcat with buff-gold coat, distinct dark spots, forehead stripes &amp; ringed tail.',
+    archetype: 'felid',
+    scale: 0.72,
+    bodyLen: 0.96, bodyRad: 0.19, chestBulk: 1.05, legLen: 0.48, legThick: 0.052,
+    neckLen: 0.22, headScale: 0.92, snoutLen: 0.14, snoutRad: 0.078,
+    earType: 'round', earSize: 0.075, tailLen: 0.58, tailThick: 0.042,
+    baseColor: '#bfa469', bellyColor: '#f5efe2', pattern: 'leopardcat', noseColor: '#c46c64', eyeColor: '#96a832',
+  },
+  MuskDeer: {
+    bio: '<strong>Moschus moschiferus (Siberian Musk Deer):</strong> Compact arched-back forest deer with dark olive-brown coat and long downward saber canine tusks.',
+    archetype: 'cervid',
+    scale: 0.88,
+    bodyLen: 0.98, bodyRad: 0.22, chestBulk: 0.96, legLen: 0.62, legThick: 0.048,
+    neckLen: 0.32, headScale: 0.90, snoutLen: 0.19, snoutRad: 0.068,
+    earType: 'deer', earSize: 0.125, tailLen: 0.12, tailThick: 0.035,
+    baseColor: '#5e4630', bellyColor: '#b5a28c', pattern: 'muskdeer', noseColor: '#1f1b18', eyeColor: '#291c12',
+    saberTusks: true,
+  },
+  RaccoonDog: {
+    bio: '<strong>Nyctereutes procyonoides:</strong> Stocky winter-coated canid with grizzled brown-black fur, unmistakable black raccoon eye mask &amp; fat bushy tail.',
+    archetype: 'canid',
+    scale: 0.80,
+    bodyLen: 0.94, bodyRad: 0.24, chestBulk: 1.12, legLen: 0.42, legThick: 0.055,
+    neckLen: 0.20, headScale: 0.96, snoutLen: 0.17, snoutRad: 0.072,
+    earType: 'round', earSize: 0.075, tailLen: 0.46, tailThick: 0.078,
+    baseColor: '#6e5842', bellyColor: '#362d24', pattern: 'raccoondog', noseColor: '#171514', eyeColor: '#2e1f12',
+  },
+  RedFox: {
+    bio: '<strong>Vulpes vulpes:</strong> Agile vulpine rig with flame-red coat, pure white chest bib, black lower leg stockings, pointed snout &amp; white-tipped brush tail.',
+    archetype: 'canid',
+    scale: 0.84,
+    bodyLen: 1.02, bodyRad: 0.20, chestBulk: 1.08, legLen: 0.52, legThick: 0.048,
+    neckLen: 0.25, headScale: 0.94, snoutLen: 0.22, snoutRad: 0.065,
+    earType: 'pointed', earSize: 0.115, tailLen: 0.72, tailThick: 0.085,
+    baseColor: '#c84b1c', bellyColor: '#f7f4ef', pattern: 'fox', noseColor: '#171412', eyeColor: '#b87b1e',
+    whiteTailTip: true,
+  },
+  RoeDeer: {
+    bio: '<strong>Capreolus pygargus (Siberian Roe Deer):</strong> Graceful rufous-tan cervid with long slender legs, white rump patch &amp; upright 3-tine antlers.',
+    archetype: 'cervid',
+    scale: 1.08,
+    bodyLen: 1.10, bodyRad: 0.23, chestBulk: 1.06, legLen: 0.74, legThick: 0.048,
+    neckLen: 0.40, headScale: 0.94, snoutLen: 0.21, snoutRad: 0.072,
+    earType: 'deer', earSize: 0.13, tailLen: 0.14, tailThick: 0.035,
+    baseColor: '#a86032', bellyColor: '#ebd9c3', pattern: 'roedeer', noseColor: '#1f1b18', eyeColor: '#261910',
+    antlers: 'roe',
+  },
+  Sable: {
+    bio: '<strong>Martes zibellina:</strong> Supple forest mustelid with silky dark chocolate-brown fur, bright golden-amber throat patch &amp; bushy tail.',
+    archetype: 'mustelid',
+    scale: 0.70,
+    bodyLen: 0.96, bodyRad: 0.17, chestBulk: 1.02, legLen: 0.36, legThick: 0.048,
+    neckLen: 0.24, headScale: 0.88, snoutLen: 0.15, snoutRad: 0.065,
+    earType: 'pointed', earSize: 0.075, tailLen: 0.48, tailThick: 0.065,
+    baseColor: '#3b2618', bellyColor: '#4f3524', pattern: 'sable', noseColor: '#171210', eyeColor: '#1c130e',
+  },
+  SikaDeer: {
+    bio: '<strong>Cervus nippon (Ussuri Sika Deer):</strong> Regal chestnut-red cervid adorned with bright white dappled summer spots, white rump &amp; 4-point branched antlers.',
+    archetype: 'cervid',
+    scale: 1.18,
+    bodyLen: 1.18, bodyRad: 0.25, chestBulk: 1.10, legLen: 0.76, legThick: 0.052,
+    neckLen: 0.44, headScale: 0.98, snoutLen: 0.22, snoutRad: 0.076,
+    earType: 'deer', earSize: 0.135, tailLen: 0.22, tailThick: 0.038,
+    baseColor: '#9e4e24', bellyColor: '#f2e6d5', pattern: 'sikaspots', noseColor: '#1f1916', eyeColor: '#26180e',
+    antlers: 'sika',
+  },
+  Weasel: {
+    bio: '<strong>Mustela sibirica (Siberian Weasel):</strong> Elongated sinuous predator with cinnamon-ochre dorsal coat, crisp white underbelly &amp; long neck.',
+    archetype: 'mustelid',
+    scale: 0.62,
+    bodyLen: 1.05, bodyRad: 0.14, chestBulk: 0.96, legLen: 0.30, legThick: 0.042,
+    neckLen: 0.28, headScale: 0.84, snoutLen: 0.14, snoutRad: 0.058,
+    earType: 'round', earSize: 0.055, tailLen: 0.52, tailThick: 0.045,
+    baseColor: '#b56c2b', bellyColor: '#faf6f0', pattern: 'countershade', noseColor: '#261a16', eyeColor: '#17100c',
+  },
+  WildBoar: {
+    bio: '<strong>Sus scrofa (Ussuri Wild Boar):</strong> Powerful front-heavy suid with coarse dark bristly hide, dorsal mane ridge, flat rooting snout disc &amp; curved ivory tusks.',
+    archetype: 'boar',
+    scale: 1.08,
+    bodyLen: 1.12, bodyRad: 0.30, chestBulk: 1.28, legLen: 0.46, legThick: 0.068,
+    neckLen: 0.20, headScale: 1.18, snoutLen: 0.28, snoutRad: 0.095,
+    earType: 'pointed', earSize: 0.095, tailLen: 0.32, tailThick: 0.025,
+    baseColor: '#362d28', bellyColor: '#29221e', pattern: 'boar', noseColor: '#6e524b', eyeColor: '#2b1d14',
+    boarTusks: true, dorsalMane: true,
+  },
+  'Y-T-Marten': {
+    bio: '<strong>Martes flavigula (Yellow-Throated Marten):</strong> Sleek arboreal/terrestrial predator with vivid golden-yellow chest/forequarters and dark chocolate hindquarters.',
+    archetype: 'mustelid',
+    scale: 0.76,
+    bodyLen: 1.06, bodyRad: 0.17, chestBulk: 1.04, legLen: 0.40, legThick: 0.050,
+    neckLen: 0.26, headScale: 0.90, snoutLen: 0.16, snoutRad: 0.065,
+    earType: 'round', earSize: 0.068, tailLen: 0.72, tailThick: 0.055,
+    baseColor: '#2e221b', bellyColor: '#e8a829', pattern: 'marten', noseColor: '#141110', eyeColor: '#1f140e',
+  },
+};
+
+// Cache generated procedural fur textures per species for instant switching
+const speciesTextureCache = {};
+
+function getOrCreateSpeciesTextures(speciesKey) {
+  if (speciesTextureCache[speciesKey]) return speciesTextureCache[speciesKey];
+  const cfg = SPECIES_CATALOG[speciesKey] || SPECIES_CATALOG.Leopard;
+
+  // 1. Color Albedo Pelt Texture (512x512)
+  const c = document.createElement('canvas');
+  c.width = 512;
+  c.height = 512;
+  const ctx = c.getContext('2d');
+
+  // Base coat with dorsal-ventral countershading
+  const grad = ctx.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0.0, cfg.baseColor);
+  grad.addColorStop(0.68, cfg.baseColor);
+  grad.addColorStop(0.92, cfg.bellyColor);
+  grad.addColorStop(1.0, cfg.bellyColor);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Species-specific coat markings
+  if (cfg.pattern === 'rosettes') {
+    for (let gx = 24; gx < 500; gx += 42) {
+      for (let gy = 24; gy < 420; gy += 40) {
+        const rx = gx + (Math.sin(gy) * 10);
+        const ry = gy + (Math.cos(gx) * 8);
+        const rad = 9 + (gx * gy % 5);
+        // Warm dark gold interior of rosette
+        ctx.fillStyle = 'rgba(138, 76, 18, 0.75)';
+        ctx.beginPath();
+        ctx.arc(rx, ry, rad, 0, Math.PI * 2);
+        ctx.fill();
+        // Broken black C-rings around rosette
+        ctx.strokeStyle = '#1c1108';
+        ctx.lineWidth = 4.2;
+        for (let seg = 0; seg < 3; seg++) {
+          const a1 = seg * 2.1 + (gx % 3) * 0.4;
+          ctx.beginPath();
+          ctx.arc(rx, ry, rad + 1.5, a1, a1 + 1.45);
+          ctx.stroke();
+        }
+      }
+    }
+  } else if (cfg.pattern === 'stripes') {
+    ctx.strokeStyle = '#170e07';
+    ctx.lineWidth = 8.5;
+    ctx.lineCap = 'round';
+    for (let x = 16; x < 500; x += 26) {
+      ctx.beginPath();
+      ctx.moveTo(x, 10);
+      ctx.bezierCurveTo(x - 14, 140, x + 16, 260, x - 6, 410);
+      ctx.stroke();
+      if (x % 52 === 0) {
+        ctx.beginPath();
+        ctx.moveTo(x - 4, 150);
+        ctx.lineTo(x + 14, 340);
+        ctx.stroke();
+      }
+    }
+  } else if (cfg.pattern === 'leopardcat') {
+    ctx.fillStyle = '#24180c';
+    for (let gx = 20; gx < 500; gx += 34) {
+      for (let gy = 20; gy < 420; gy += 28) {
+        ctx.beginPath();
+        ctx.ellipse(gx + (gy % 9), gy, 8, 5, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else if (cfg.pattern === 'sikaspots') {
+    // Dark dorsal stripe + bright white dappled spots
+    ctx.fillStyle = '#5e2810';
+    ctx.fillRect(0, 0, 512, 36);
+    ctx.fillStyle = '#fffaf2';
+    for (let gx = 32; gx < 480; gx += 42) {
+      for (let gy = 55; gy < 380; gy += 38) {
+        ctx.beginPath();
+        ctx.arc(gx + (gy % 14), gy, 6.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else if (cfg.pattern === 'pied') {
+    ctx.fillStyle = '#f5f2ec';
+    const patches = [[110, 140, 85, 65], [320, 210, 95, 75], [220, 380, 140, 80], [420, 110, 70, 60]];
+    for (const [px, py, rx, ry] of patches) {
+      ctx.beginPath();
+      ctx.ellipse(px, py, rx, ry, 0.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (cfg.pattern === 'saddle') {
+    ctx.fillStyle = 'rgba(32, 24, 18, 0.78)';
+    ctx.beginPath();
+    ctx.ellipse(256, 80, 190, 120, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (cfg.pattern === 'marten') {
+    const mGrad = ctx.createLinearGradient(0, 0, 512, 0);
+    mGrad.addColorStop(0.0, '#e8a829');
+    mGrad.addColorStop(0.45, '#d48d1e');
+    mGrad.addColorStop(0.75, '#2b1e16');
+    mGrad.addColorStop(1.0, '#1c1410');
+    ctx.fillStyle = mGrad;
+    ctx.fillRect(0, 0, 512, 512);
+  } else if (cfg.pattern === 'badger' || cfg.pattern === 'raccoondog' || cfg.pattern === 'boar' || cfg.pattern === 'agouti') {
+    // Grizzled coarse guard hairs
+    for (let i = 0; i < 4000; i++) {
+      const x = Math.random() * 512;
+      const y = Math.random() * 512;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(235, 230, 220, 0.25)' : 'rgba(20, 18, 16, 0.32)';
+      ctx.fillRect(x, y, 5, 2);
+    }
+  }
+
+  // Fine directional fur strokes across the entire pelt (6,500 strands)
+  for (let i = 0; i < 6500; i++) {
+    const x = Math.random() * 512;
+    const y = Math.random() * 512;
+    const len = 5 + Math.random() * 7;
+    ctx.strokeStyle = i % 2 === 0 ? 'rgba(255, 248, 235, 0.11)' : 'rgba(15, 10, 5, 0.14)';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + len, y + (Math.random() - 0.5) * 2.5);
+    ctx.stroke();
+  }
+
+  const colorMap = new THREE.CanvasTexture(c);
+  colorMap.encoding = THREE.sRGBEncoding;
+
+  // 2. High-Frequency Fur Bump Map (256x256)
+  const bc = document.createElement('canvas');
+  bc.width = 256;
+  bc.height = 256;
+  const bctx = bc.getContext('2d');
+  bctx.fillStyle = '#808080';
+  bctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 5000; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    bctx.strokeStyle = i % 2 === 0 ? '#b0b0b0' : '#505050';
+    bctx.lineWidth = 1.2;
+    bctx.beginPath();
+    bctx.moveTo(x, y);
+    bctx.lineTo(x + 5, y + 1);
+    bctx.stroke();
+  }
+  const bumpMap = new THREE.CanvasTexture(bc);
+
+  const result = { colorMap, bumpMap };
+  speciesTextureCache[speciesKey] = result;
+  return result;
+}
+
+// Master 3D Animal Scene Graph Container
 const animalRoot = new THREE.Group();
 animalRoot.position.copy(Sim.animalPos);
 scene.add(animalRoot);
 
-function generateWildlifeTexture(species) {
-  const c = document.createElement('canvas');
-  c.width = 512;
-  c.height = 384;
-  const ctx = c.getContext('2d');
-  ctx.clearRect(0, 0, 512, 384);
+let currentAnimalRig = null;
 
-  ctx.save();
-  ctx.translate(256, 192);
+function buildRealisticAnimal3D(speciesKey) {
+  const cfg = SPECIES_CATALOG[speciesKey] || SPECIES_CATALOG.Leopard;
+  const { colorMap, bumpMap } = getOrCreateSpeciesTextures(speciesKey);
 
-  if (species === 'Leopard') {
-    ctx.fillStyle = '#c58428';
-    ctx.beginPath(); ctx.ellipse(0, 20, 140, 75, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(-130, -25, 45, 40, -0.2, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#221105';
-    for (let x = -100; x <= 100; x += 28) {
-      for (let y = -10; y <= 50; y += 22) {
-        ctx.beginPath(); ctx.arc(x + (y % 12), y, 6.5, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-  } else if (species === 'AmurTiger') {
-    ctx.fillStyle = '#d96c14';
-    ctx.beginPath(); ctx.ellipse(0, 20, 160, 85, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(-150, -30, 52, 48, -0.1, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#1a0e05'; ctx.lineWidth = 10;
-    for (let x = -110; x <= 120; x += 30) {
-      ctx.beginPath(); ctx.moveTo(x, -35); ctx.lineTo(x + 12, 65); ctx.stroke();
-    }
-  } else if (species === 'WildBoar') {
-    ctx.fillStyle = '#312824';
-    ctx.beginPath(); ctx.ellipse(0, 15, 135, 80, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(-130, 10, 38, 26, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#423732'; ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath(); ctx.moveTo(-125, 12); ctx.lineTo(-142, -2); ctx.lineTo(-120, 22); ctx.fill();
-  } else if (species === 'BlackBear') {
-    ctx.fillStyle = '#1c1b1a';
-    ctx.beginPath(); ctx.ellipse(0, 25, 150, 95, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(-135, -20, 55, 50, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(-155, -60, 18, 0, Math.PI * 2); ctx.arc(-115, -65, 18, 0, Math.PI * 2); ctx.fill();
-  } else {
-    ctx.fillStyle = '#8f5a2e';
-    ctx.beginPath(); ctx.ellipse(0, 20, 125, 65, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(-115, -35, 35, 30, -0.3, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#5c3919'; ctx.lineWidth = 6;
-    ctx.beginPath(); ctx.moveTo(-120, -60); ctx.lineTo(-140, -105);
-    ctx.moveTo(-115, -60); ctx.lineTo(-100, -105); ctx.stroke();
+  // Update bio description in Left Panel
+  const bioEl = document.getElementById('species-bio-note');
+  if (bioEl && cfg.bio) bioEl.innerHTML = cfg.bio;
+
+  const peltMat = new THREE.MeshStandardMaterial({
+    map: colorMap,
+    bumpMap: bumpMap,
+    bumpScale: 0.022,
+    roughness: 0.78,
+    metalness: 0.04,
+  });
+
+  const bellyMat = new THREE.MeshStandardMaterial({
+    color: cfg.bellyColor,
+    bumpMap: bumpMap,
+    bumpScale: 0.015,
+    roughness: 0.82,
+  });
+
+  const darkAccentMat = new THREE.MeshStandardMaterial({
+    color: 0x1b1613,
+    roughness: 0.75,
+  });
+
+  const whiteAccentMat = new THREE.MeshStandardMaterial({
+    color: 0xf7f4ee,
+    roughness: 0.75,
+  });
+
+  const noseMat = new THREE.MeshStandardMaterial({
+    color: cfg.noseColor,
+    roughness: 0.25,
+    metalness: 0.1,
+  });
+
+  const eyeIrisMat = new THREE.MeshStandardMaterial({
+    color: cfg.eyeColor,
+    roughness: 0.1,
+    metalness: 0.2,
+    emissive: new THREE.Color(cfg.eyeColor),
+    emissiveIntensity: 0.22, // realistic wildlife tapetum lucidum reflection under spotlight
+  });
+
+  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x050505 });
+  const ivoryMat = new THREE.MeshStandardMaterial({ color: 0xf5eedc, roughness: 0.3, metalness: 0.08 });
+  const antlerMat = new THREE.MeshStandardMaterial({ color: 0x6e5239, roughness: 0.7 });
+
+  // Root model wrapper offset by y = -0.45 so paws touch ground (y = 0) while animalRoot stays at y = 0.45
+  const modelGroup = new THREE.Group();
+  modelGroup.position.y = -0.45;
+
+  const s = cfg.scale;
+  const hipHeight = cfg.legLen * s;
+  const halfLen = (cfg.bodyLen * s) * 0.42;
+
+  // Spine Group sits at hip/shoulder height
+  const spineGroup = new THREE.Group();
+  spineGroup.position.y = hipHeight;
+  modelGroup.add(spineGroup);
+
+  // 1. Sculpted Multi-Part Torso (Chest Ribcage + Mid Abdomen + Muscular Pelvis/Rump)
+  const chestGeo = new THREE.SphereGeometry(cfg.bodyRad * s * cfg.chestBulk, 24, 18);
+  chestGeo.scale(1.02, 1.05, 1.35);
+  const chestMesh = new THREE.Mesh(chestGeo, peltMat);
+  chestMesh.position.set(0, 0.02 * s, halfLen * 0.58);
+  spineGroup.add(chestMesh);
+
+  const bellyGeo = new THREE.SphereGeometry(cfg.bodyRad * s * 0.94, 24, 18);
+  bellyGeo.scale(0.95, 0.96, 1.45);
+  const bellyMesh = new THREE.Mesh(bellyGeo, peltMat);
+  bellyMesh.position.set(0, 0.0, 0);
+  spineGroup.add(bellyMesh);
+
+  // Countershaded underbelly strip
+  const underBellyGeo = new THREE.SphereGeometry(cfg.bodyRad * s * 0.86, 18, 14);
+  underBellyGeo.scale(0.82, 0.65, 1.55);
+  const underBellyMesh = new THREE.Mesh(underBellyGeo, bellyMat);
+  underBellyMesh.position.set(0, -cfg.bodyRad * s * 0.34, 0.05 * s);
+  spineGroup.add(underBellyMesh);
+
+  const pelvisGeo = new THREE.SphereGeometry(cfg.bodyRad * s * (cfg.archetype === 'hare' ? 1.15 : 0.98), 24, 18);
+  pelvisGeo.scale(0.98, 1.04, 1.25);
+  const pelvisMesh = new THREE.Mesh(pelvisGeo, peltMat);
+  pelvisMesh.position.set(0, (cfg.archetype === 'cervid' || cfg.archetype === 'hare') ? 0.04 * s : 0.01 * s, -halfLen * 0.68);
+  spineGroup.add(pelvisMesh);
+
+  // Muscular Shoulder Scapula & Hind Haunch Bulges
+  for (const side of [-1, 1]) {
+    const shoulderGeo = new THREE.SphereGeometry(cfg.bodyRad * s * 0.58, 16, 14);
+    shoulderGeo.scale(0.65, 1.15, 0.95);
+    const shoulder = new THREE.Mesh(shoulderGeo, peltMat);
+    shoulder.position.set(side * cfg.bodyRad * s * 0.72, 0.03 * s, halfLen * 0.68);
+    spineGroup.add(shoulder);
+
+    const haunchGeo = new THREE.SphereGeometry(cfg.bodyRad * s * 0.64, 16, 14);
+    haunchGeo.scale(0.68, 1.18, 1.05);
+    const haunch = new THREE.Mesh(haunchGeo, peltMat);
+    haunch.position.set(side * cfg.bodyRad * s * 0.68, 0.01 * s, -halfLen * 0.72);
+    spineGroup.add(haunch);
   }
 
-  // Realistic Eye
-  ctx.fillStyle = '#0a0a0a';
-  ctx.beginPath(); ctx.arc(-135, -28, 4.5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = '#fffdf0';
-  ctx.beginPath(); ctx.arc(-136, -29, 1.8, 0, Math.PI * 2); ctx.fill();
+  // Species-specific torso traits:
+  if (cfg.pattern === 'moonbear') {
+    // Asiatic Black Bear white crescent chest V-blaze
+    const blazeL = new THREE.Mesh(new THREE.CylinderGeometry(0.025 * s, 0.045 * s, 0.24 * s, 10), whiteAccentMat);
+    blazeL.position.set(-0.08 * s, 0.06 * s, halfLen * 0.98);
+    blazeL.rotation.z = -0.48;
+    blazeL.rotation.x = 0.25;
+    spineGroup.add(blazeL);
+    const blazeR = blazeL.clone();
+    blazeR.position.x = 0.08 * s;
+    blazeR.rotation.z = 0.48;
+    spineGroup.add(blazeR);
+  }
+  if (cfg.pattern === 'sable' || cfg.pattern === 'fox') {
+    // Throat/chest patch (golden-orange for Sable, pure white bib for RedFox)
+    const bibMat = cfg.pattern === 'sable'
+      ? new THREE.MeshStandardMaterial({ color: 0xe68a20, roughness: 0.7 })
+      : whiteAccentMat;
+    const bib = new THREE.Mesh(new THREE.SphereGeometry(cfg.bodyRad * s * 0.68, 16, 12), bibMat);
+    bib.scale.set(0.85, 0.95, 0.75);
+    bib.position.set(0, 0.02 * s, halfLen * 0.85);
+    spineGroup.add(bib);
+  }
+  if (cfg.archetype === 'cervid' && (speciesKey === 'RoeDeer' || speciesKey === 'SikaDeer')) {
+    // Bright white cervid rump mirror patch
+    const rumpPatch = new THREE.Mesh(new THREE.SphereGeometry(cfg.bodyRad * s * 0.65, 16, 12), whiteAccentMat);
+    rumpPatch.scale.set(0.95, 0.85, 0.55);
+    rumpPatch.position.set(0, 0.02 * s, -halfLen * 0.98);
+    spineGroup.add(rumpPatch);
+  }
+  if (cfg.dorsalMane) {
+    // Wild Boar spiky dorsal bristle ridge
+    for (let m = 0; m < 9; m++) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.035 * s, 0.12 * s, 6), darkAccentMat);
+      spike.position.set(0, cfg.bodyRad * s * 1.05, halfLen * 0.75 - m * (halfLen * 0.18));
+      spike.rotation.x = -0.25;
+      spineGroup.add(spike);
+    }
+  }
+  if (cfg.udder) {
+    const udderMat = new THREE.MeshStandardMaterial({ color: 0xebb5ad, roughness: 0.6 });
+    const udder = new THREE.Mesh(new THREE.SphereGeometry(0.14 * s, 14, 12), udderMat);
+    udder.scale.set(0.9, 0.75, 1.15);
+    udder.position.set(0, -cfg.bodyRad * s * 0.78, -halfLen * 0.35);
+    spineGroup.add(udder);
+  }
 
-  ctx.restore();
+  // 2. Articulated Neck & Sculpted Head Assembly
+  const neckPivot = new THREE.Group();
+  neckPivot.position.set(0, cfg.bodyRad * s * 0.32, halfLen * 0.78);
+  spineGroup.add(neckPivot);
 
-  const tex = new THREE.CanvasTexture(c);
-  tex.needsUpdate = true;
-  return tex;
-}
+  const neckLen = cfg.neckLen * s;
+  const neckGeo = new THREE.CylinderGeometry(cfg.bodyRad * s * 0.52, cfg.bodyRad * s * 0.74, neckLen, 16);
+  const neckMesh = new THREE.Mesh(neckGeo, cfg.pattern === 'marten' ? bellyMat : peltMat);
+  const neckAngle = cfg.archetype === 'cervid' ? 0.52 : (cfg.archetype === 'boar' || cfg.archetype === 'badger' ? 1.15 : 0.82);
+  neckMesh.position.set(0, Math.cos(neckAngle) * (neckLen * 0.45), Math.sin(neckAngle) * (neckLen * 0.45));
+  neckMesh.rotation.x = neckAngle;
+  neckPivot.add(neckMesh);
 
-let animalMesh = null;
-function updateAnimalBillboard() {
-  if (animalMesh) animalRoot.remove(animalMesh);
-  const tex = generateWildlifeTexture(Sim.species);
-  const mat = new THREE.MeshStandardMaterial({
-    map: tex,
-    transparent: true,
-    alphaTest: 0.1,
-    side: THREE.DoubleSide,
-    roughness: 0.8,
+  const headPivot = new THREE.Group();
+  headPivot.position.set(0, Math.cos(neckAngle) * (neckLen * 0.86), Math.sin(neckAngle) * (neckLen * 0.86));
+  neckPivot.add(headPivot);
+
+  const hs = cfg.headScale * s;
+  // Cranium skull
+  const craniumGeo = new THREE.SphereGeometry(0.145 * hs, 22, 18);
+  craniumGeo.scale(1.02, 0.96, 1.18);
+  const cranium = new THREE.Mesh(craniumGeo, peltMat);
+  headPivot.add(cranium);
+
+  // Cheek ruffs for Tiger / RaccoonDog / Lynx-like fullness
+  if (cfg.cheekRuffs || cfg.pattern === 'raccoondog') {
+    const ruffMat = cfg.cheekRuffs ? whiteAccentMat : peltMat;
+    for (const side of [-1, 1]) {
+      const ruff = new THREE.Mesh(new THREE.SphereGeometry(0.085 * hs, 12, 10), ruffMat);
+      ruff.scale.set(0.65, 1.1, 0.85);
+      ruff.position.set(side * 0.125 * hs, -0.02 * hs, 0.02 * hs);
+      headPivot.add(ruff);
+    }
+  }
+
+  // Badger & RaccoonDog facial markings
+  if (cfg.pattern === 'badger') {
+    const centerStripe = new THREE.Mesh(new THREE.BoxGeometry(0.045 * hs, 0.03 * hs, 0.28 * hs), whiteAccentMat);
+    centerStripe.position.set(0, 0.085 * hs, 0.09 * hs);
+    centerStripe.rotation.x = 0.28;
+    headPivot.add(centerStripe);
+    for (const side of [-1, 1]) {
+      const eyeBand = new THREE.Mesh(new THREE.BoxGeometry(0.045 * hs, 0.045 * hs, 0.26 * hs), darkAccentMat);
+      eyeBand.position.set(side * 0.065 * hs, 0.06 * hs, 0.08 * hs);
+      eyeBand.rotation.x = 0.28;
+      headPivot.add(eyeBand);
+    }
+  } else if (cfg.pattern === 'raccoondog') {
+    for (const side of [-1, 1]) {
+      const mask = new THREE.Mesh(new THREE.SphereGeometry(0.068 * hs, 12, 10), darkAccentMat);
+      mask.scale.set(0.9, 0.85, 0.6);
+      mask.position.set(side * 0.068 * hs, 0.02 * hs, 0.11 * hs);
+      headPivot.add(mask);
+    }
+  }
+
+  // Sculpted Snout / Muzzle & Lower Jaw
+  const snoutLen = cfg.snoutLen * s;
+  const snoutRad = cfg.snoutRad * s;
+  const muzzleMat = (cfg.pattern === 'moonbear' || cfg.pattern === 'saddle')
+    ? new THREE.MeshStandardMaterial({ color: cfg.pattern === 'moonbear' ? 0x9e744b : 0x241d18, roughness: 0.7 })
+    : peltMat;
+
+  const snoutGeo = new THREE.CylinderGeometry(snoutRad * 0.74, snoutRad * 1.08, snoutLen, 16);
+  snoutGeo.rotateX(Math.PI / 2);
+  const snoutMesh = new THREE.Mesh(snoutGeo, muzzleMat);
+  snoutMesh.position.set(0, -0.022 * hs, 0.12 * hs + snoutLen * 0.42);
+  headPivot.add(snoutMesh);
+
+  // Lower jaw / chin
+  const jawGeo = new THREE.CylinderGeometry(snoutRad * 0.52, snoutRad * 0.82, snoutLen * 0.88, 14);
+  jawGeo.rotateX(Math.PI / 2);
+  const jawMesh = new THREE.Mesh(jawGeo, bellyMat);
+  jawMesh.position.set(0, -0.068 * hs, 0.11 * hs + snoutLen * 0.36);
+  headPivot.add(jawMesh);
+
+  // Wet Nose Pad / Boar Rooting Disc
+  const noseTipZ = 0.12 * hs + snoutLen * 0.88;
+  if (cfg.archetype === 'boar') {
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(snoutRad * 0.78, snoutRad * 0.78, 0.03 * s, 16), noseMat);
+    disc.rotation.x = Math.PI / 2;
+    disc.position.set(0, -0.02 * hs, noseTipZ);
+    headPivot.add(disc);
+  } else {
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(snoutRad * 0.46, 14, 12), noseMat);
+    nose.scale.set(1.15, 0.82, 0.75);
+    nose.position.set(0, -0.005 * hs, noseTipZ);
+    headPivot.add(nose);
+  }
+
+  // Reflective Eyes with Pupils & Brow Ridges
+  for (const side of [-1, 1]) {
+    const eyeGroup = new THREE.Group();
+    const eyeX = side * (cfg.archetype === 'cervid' || cfg.archetype === 'bovine' || cfg.archetype === 'hare' ? 0.115 * hs : 0.078 * hs);
+    const eyeY = 0.042 * hs;
+    const eyeZ = 0.118 * hs;
+    eyeGroup.position.set(eyeX, eyeY, eyeZ);
+
+    const eyeball = new THREE.Mesh(new THREE.SphereGeometry(0.024 * hs, 12, 12), eyeIrisMat);
+    eyeGroup.add(eyeball);
+
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.013 * hs, 10, 10), pupilMat);
+    pupil.position.set(side * 0.004 * hs, 0, 0.016 * hs);
+    eyeGroup.add(pupil);
+
+    headPivot.add(eyeGroup);
+  }
+
+  // Felid / Mustelid Whiskers
+  if (cfg.archetype === 'felid' || cfg.archetype === 'mustelid') {
+    const whiskerMat = new THREE.MeshBasicMaterial({ color: 0xf5f2eb, transparent: true, opacity: 0.75 });
+    for (const side of [-1, 1]) {
+      for (let w = -1; w <= 1; w++) {
+        const wGeo = new THREE.CylinderGeometry(0.0018 * s, 0.0008 * s, 0.15 * s, 4);
+        wGeo.rotateZ(Math.PI / 2);
+        const whisker = new THREE.Mesh(wGeo, whiskerMat);
+        whisker.position.set(side * (snoutRad * 0.65 + 0.05 * s), -0.025 * hs + w * 0.012 * hs, noseTipZ - 0.04 * s);
+        whisker.rotation.y = -side * 0.25;
+        whisker.rotation.z = side * (w * 0.12 - 0.1);
+        headPivot.add(whisker);
+      }
+    }
+  }
+
+  // Sculpted Ears (Left & Right Pivots for Animated Ear Twitches)
+  const earL = new THREE.Group();
+  const earR = new THREE.Group();
+  earL.position.set(0.095 * hs, 0.115 * hs, -0.01 * hs);
+  earR.position.set(-0.095 * hs, 0.115 * hs, -0.01 * hs);
+  headPivot.add(earL);
+  headPivot.add(earR);
+
+  const es = cfg.earSize * s;
+  for (const [idx, earGrp] of [[1, earL], [-1, earR]]) {
+    let earGeo;
+    if (cfg.earType === 'hare') {
+      earGeo = new THREE.CylinderGeometry(es * 0.12, es * 0.20, es, 12);
+      earGeo.scale(0.8, 1.0, 0.45);
+      const earMesh = new THREE.Mesh(earGeo, peltMat);
+      earMesh.position.set(idx * 0.02 * s, es * 0.45, -0.02 * s);
+      earMesh.rotation.z = -idx * 0.22;
+      earMesh.rotation.x = -0.18;
+      earGrp.add(earMesh);
+      // Black ear tip on Hare
+      const tipMesh = new THREE.Mesh(new THREE.ConeGeometry(es * 0.13, es * 0.28, 10), darkAccentMat);
+      tipMesh.scale.set(0.8, 1.0, 0.45);
+      tipMesh.position.set(idx * 0.04 * s, es * 0.92, -0.035 * s);
+      tipMesh.rotation.z = -idx * 0.22;
+      earGrp.add(tipMesh);
+    } else if (cfg.earType === 'pointed' || cfg.earType === 'deer') {
+      earGeo = new THREE.ConeGeometry(es * 0.46, es * 1.15, 12);
+      earGeo.scale(0.85, 1.0, 0.48);
+      const earMesh = new THREE.Mesh(earGeo, cfg.pattern === 'fox' ? darkAccentMat : peltMat);
+      earMesh.position.set(idx * 0.02 * s, es * 0.45, 0);
+      earMesh.rotation.z = -idx * (cfg.earType === 'deer' ? 0.55 : 0.25);
+      earGrp.add(earMesh);
+    } else if (cfg.earType === 'horizontal') {
+      earGeo = new THREE.SphereGeometry(es * 0.55, 12, 10);
+      earGeo.scale(1.3, 0.45, 0.55);
+      const earMesh = new THREE.Mesh(earGeo, peltMat);
+      earMesh.position.set(idx * es * 0.55, -0.02 * s, -0.02 * s);
+      earGrp.add(earMesh);
+    } else {
+      // Round ears (Felids, Bear, Badger, Marten)
+      earGeo = new THREE.SphereGeometry(es * 0.62, 14, 12);
+      earGeo.scale(0.95, 1.05, 0.38);
+      const earMesh = new THREE.Mesh(earGeo, peltMat);
+      earMesh.position.set(idx * 0.02 * s, es * 0.35, 0);
+      earMesh.rotation.z = -idx * 0.32;
+      earGrp.add(earMesh);
+    }
+  }
+
+  // Species Head Appendages: Antlers, Horns, Boar Tusks, Musk Deer Saber Fangs
+  if (cfg.antlers) {
+    for (const side of [-1, 1]) {
+      const antlerGrp = new THREE.Group();
+      antlerGrp.position.set(side * 0.065 * hs, 0.135 * hs, -0.01 * hs);
+
+      // Main beam
+      const beamH = (cfg.antlers === 'sika' ? 0.44 : 0.28) * s;
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.010 * s, 0.018 * s, beamH, 8), antlerMat);
+      beam.position.set(side * 0.06 * s, beamH * 0.45, -0.05 * s);
+      beam.rotation.z = -side * 0.32;
+      beam.rotation.x = -0.24;
+      antlerGrp.add(beam);
+
+      // Brow tine
+      const tine1 = new THREE.Mesh(new THREE.ConeGeometry(0.011 * s, 0.14 * s, 7), antlerMat);
+      tine1.position.set(side * 0.04 * s, beamH * 0.28, 0.04 * s);
+      tine1.rotation.x = 0.65;
+      tine1.rotation.z = -side * 0.2;
+      antlerGrp.add(tine1);
+
+      // Upper tines
+      const tine2 = new THREE.Mesh(new THREE.ConeGeometry(0.010 * s, 0.15 * s, 7), antlerMat);
+      tine2.position.set(side * 0.09 * s, beamH * 0.68, 0.01 * s);
+      tine2.rotation.x = 0.45;
+      tine2.rotation.z = -side * 0.45;
+      antlerGrp.add(tine2);
+
+      if (cfg.antlers === 'sika') {
+        const tine3 = new THREE.Mesh(new THREE.ConeGeometry(0.009 * s, 0.14 * s, 7), antlerMat);
+        tine3.position.set(side * 0.12 * s, beamH * 0.92, -0.06 * s);
+        tine3.rotation.x = 0.15;
+        tine3.rotation.z = -side * 0.25;
+        antlerGrp.add(tine3);
+      }
+      headPivot.add(antlerGrp);
+    }
+  }
+
+  if (cfg.horns) {
+    // Curved Bovine Horns
+    for (const side of [-1, 1]) {
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.026 * s, 0.22 * s, 10), ivoryMat);
+      horn.position.set(side * 0.14 * hs, 0.13 * hs, -0.02 * hs);
+      horn.rotation.z = -side * 0.75;
+      horn.rotation.x = 0.35;
+      headPivot.add(horn);
+    }
+  }
+
+  if (cfg.boarTusks) {
+    // Upward curving lower ivory tusks on Wild Boar
+    for (const side of [-1, 1]) {
+      const tusk = new THREE.Mesh(new THREE.ConeGeometry(0.014 * s, 0.11 * s, 8), ivoryMat);
+      tusk.position.set(side * (snoutRad * 0.82), -0.01 * hs, noseTipZ - 0.06 * s);
+      tusk.rotation.z = -side * 0.38;
+      tusk.rotation.x = 0.22;
+      headPivot.add(tusk);
+    }
+  }
+
+  if (cfg.saberTusks) {
+    // Downward curving canine saber fangs on Siberian Musk Deer
+    for (const side of [-1, 1]) {
+      const fang = new THREE.Mesh(new THREE.ConeGeometry(0.009 * s, 0.10 * s, 8), ivoryMat);
+      fang.position.set(side * (snoutRad * 0.62), -0.075 * hs, noseTipZ - 0.05 * s);
+      fang.rotation.x = Math.PI - 0.15;
+      headPivot.add(fang);
+    }
+  }
+
+  // 3. Four Multi-Jointed Articulated Legs (FL, FR, BL, BR)
+  // Each leg has: Hip/Shoulder Pivot -> Upper Limb -> Knee/Elbow Joint -> Lower Limb -> Ankle/Paw/Hoof
+  const legs = {};
+  const legDefs = [
+    { key: 'FL', x: cfg.bodyRad * s * 0.66, z: halfLen * 0.66, isHind: false },
+    { key: 'FR', x: -cfg.bodyRad * s * 0.66, z: halfLen * 0.66, isHind: false },
+    { key: 'BL', x: cfg.bodyRad * s * 0.64, z: -halfLen * 0.70, isHind: true },
+    { key: 'BR', x: -cfg.bodyRad * s * 0.64, z: -halfLen * 0.70, isHind: true },
+  ];
+
+  const upperLen = hipHeight * 0.52;
+  const lowerLen = hipHeight * 0.48;
+  const lt = cfg.legThick * s;
+
+  const lowerLegMat = (cfg.pattern === 'fox' || cfg.pattern === 'badger' || cfg.pattern === 'raccoondog' || cfg.pattern === 'marten')
+    ? darkAccentMat
+    : peltMat;
+
+  for (const def of legDefs) {
+    const hipPivot = new THREE.Group();
+    hipPivot.position.set(def.x, 0, def.z);
+    spineGroup.add(hipPivot);
+
+    // Upper Thigh / Humerus
+    const topR = def.isHind ? lt * 1.45 : lt * 1.25;
+    const midR = lt * 0.88;
+    const upperGeo = new THREE.CylinderGeometry(topR, midR, upperLen, 14);
+    const upperMesh = new THREE.Mesh(upperGeo, peltMat);
+    upperMesh.position.y = -upperLen * 0.5;
+    // Slight natural anatomical angle
+    hipPivot.add(upperMesh);
+
+    // Knee / Stifle / Elbow Joint Sphere
+    const kneeJoint = new THREE.Mesh(new THREE.SphereGeometry(midR * 1.05, 12, 10), peltMat);
+    kneeJoint.position.y = -upperLen;
+    hipPivot.add(kneeJoint);
+
+    // Knee / Hock Pivot
+    const kneePivot = new THREE.Group();
+    kneePivot.position.y = -upperLen;
+    hipPivot.add(kneePivot);
+
+    // Lower Shin / Cannon Bone
+    const botR = lt * 0.64;
+    const lowerGeo = new THREE.CylinderGeometry(midR * 0.92, botR, lowerLen, 12);
+    const lowerMesh = new THREE.Mesh(lowerGeo, lowerLegMat);
+    lowerMesh.position.y = -lowerLen * 0.5;
+    kneePivot.add(lowerMesh);
+
+    // Sculpted Paw or Cloven Hoof resting at ground level
+    const isHoofed = cfg.archetype === 'cervid' || cfg.archetype === 'bovine' || cfg.archetype === 'boar';
+    const footMat = isHoofed ? darkAccentMat : lowerLegMat;
+    const footLen = (cfg.archetype === 'hare' && def.isHind) ? lt * 3.2 : lt * 1.85;
+    const footGeo = new THREE.SphereGeometry(botR * 1.18, 12, 10);
+    footGeo.scale(1.05, 0.58, footLen / (botR * 1.18));
+    const footMesh = new THREE.Mesh(footGeo, footMat);
+    footMesh.position.set(0, -lowerLen + botR * 0.35, footLen * 0.25);
+    kneePivot.add(footMesh);
+
+    legs[def.key] = { hipPivot, kneePivot, isHind: def.isHind };
+  }
+
+  // 4. Multi-Segment Articulated Tail
+  const tailPivot = new THREE.Group();
+  tailPivot.position.set(0, cfg.bodyRad * s * 0.22, -halfLen * 0.95);
+  spineGroup.add(tailPivot);
+
+  const tailLen = cfg.tailLen * s;
+  const tailThick = cfg.tailThick * s;
+  const tailSeg1 = new THREE.Mesh(
+    new THREE.CylinderGeometry(tailThick * 0.95, tailThick * 1.1, tailLen * 0.55, 12),
+    cfg.pattern === 'marten' ? darkAccentMat : peltMat
+  );
+  tailSeg1.position.set(0, -tailLen * 0.22, -tailLen * 0.16);
+  tailSeg1.rotation.x = 0.62;
+  tailPivot.add(tailSeg1);
+
+  const tailMidPivot = new THREE.Group();
+  tailMidPivot.position.set(0, -tailLen * 0.42, -tailLen * 0.30);
+  tailPivot.add(tailMidPivot);
+
+  const tailTipMat = cfg.whiteTailTip ? whiteAccentMat : (cfg.pattern === 'marten' ? darkAccentMat : peltMat);
+  const tailSeg2 = new THREE.Mesh(
+    new THREE.ConeGeometry(tailThick * 1.05, tailLen * 0.55, 12),
+    tailTipMat
+  );
+  tailSeg2.position.set(0, -tailLen * 0.18, -tailLen * 0.18);
+  tailSeg2.rotation.x = -Math.PI + 0.85;
+  tailMidPivot.add(tailSeg2);
+
+  // Put all animal meshes on Layer 0 with shadows enabled
+  modelGroup.traverse(obj => {
+    if (obj.isMesh) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+      obj.layers.set(0);
+    }
   });
-  animalMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.8), mat);
-  animalMesh.position.y = 0.9;
-  animalMesh.castShadow = true;
-  animalRoot.add(animalMesh);
+
+  return {
+    group: modelGroup,
+    spineGroup,
+    chestMesh,
+    neckPivot,
+    headPivot,
+    earL,
+    earR,
+    tailPivot,
+    tailMidPivot,
+    legs,
+    cfg,
+  };
 }
-updateAnimalBillboard();
+
+function rebuildAnimalForSpecies() {
+  if (currentAnimalRig) {
+    animalRoot.remove(currentAnimalRig.group);
+  }
+  currentAnimalRig = buildRealisticAnimal3D(Sim.species);
+  animalRoot.add(currentAnimalRig.group);
+}
+rebuildAnimalForSpecies();
+
+// ── Biomechanical Quadruped Gait & Idle Living Animation ─────────────────────
+function updateAnimalBiomechanics(simTime, realTimeSec) {
+  if (!currentAnimalRig) return;
+
+  const isFleeing = simTime >= 5.0;
+  // Determine if animal is actively moving along timeline or paused
+  const walkPhase = simTime * (isFleeing ? 18.5 : 8.2);
+  const strideAmp = isFleeing ? 0.68 : 0.42;
+
+  // Idle breathing & subtle life motion even when timeline is paused
+  const breath = Math.sin(realTimeSec * 3.2) * 0.025;
+  currentAnimalRig.chestMesh.scale.set(1.02 + breath, 1.05 + breath, 1.35);
+
+  // 4-Beat Diagonal/Rotary Gait Phase Offsets
+  const phaseFL = walkPhase;
+  const phaseBR = walkPhase + (isFleeing ? 0.45 : Math.PI * 0.5);
+  const phaseFR = walkPhase + (isFleeing ? 0.85 : Math.PI);
+  const phaseBL = walkPhase + (isFleeing ? Math.PI + 0.45 : Math.PI * 1.5);
+
+  const applyLegCycle = (leg, phase) => {
+    const sVal = Math.sin(phase);
+    const cVal = Math.cos(phase);
+    leg.hipPivot.rotation.x = sVal * strideAmp;
+    // Knee bends when leg lifts forward during swing phase
+    if (leg.isHind) {
+      leg.kneePivot.rotation.x = -Math.max(0, cVal) * (strideAmp * 0.95);
+    } else {
+      leg.kneePivot.rotation.x = Math.max(0, -cVal) * (strideAmp * 1.05);
+    }
+  };
+
+  applyLegCycle(currentAnimalRig.legs.FL, phaseFL);
+  applyLegCycle(currentAnimalRig.legs.FR, phaseFR);
+  applyLegCycle(currentAnimalRig.legs.BL, phaseBL);
+  applyLegCycle(currentAnimalRig.legs.BR, phaseBR);
+
+  // Spine vertical bob & gallop pitch
+  const baseHipH = currentAnimalRig.cfg.legLen * currentAnimalRig.cfg.scale;
+  const bob = Math.abs(Math.sin(walkPhase)) * (isFleeing ? 0.055 : 0.022);
+  currentAnimalRig.spineGroup.position.y = baseHipH + bob;
+  currentAnimalRig.spineGroup.rotation.x = isFleeing
+    ? Math.cos(walkPhase) * 0.085
+    : Math.sin(walkPhase * 2) * 0.02;
+
+  // Natural head look & scanning toward camera post when stalking
+  const headScanYaw = Math.sin(realTimeSec * 1.4 + simTime * 2.0) * 0.12;
+  const headNod = Math.cos(walkPhase) * (isFleeing ? 0.10 : 0.045);
+  currentAnimalRig.neckPivot.rotation.x = (isFleeing ? 0.14 : -0.05) + headNod;
+  currentAnimalRig.headPivot.rotation.y = headScanYaw;
+  currentAnimalRig.headPivot.rotation.x = -headNod * 0.6;
+
+  // Alert Ear Twitches
+  currentAnimalRig.earL.rotation.y = 0.15 + Math.sin(realTimeSec * 4.5) * 0.12;
+  currentAnimalRig.earR.rotation.y = -0.15 + Math.cos(realTimeSec * 3.8) * 0.12;
+
+  // Expressive Tail Sway
+  const tailWave = Math.sin(walkPhase * 0.8 + realTimeSec * 2.1);
+  currentAnimalRig.tailPivot.rotation.z = tailWave * 0.22;
+  currentAnimalRig.tailPivot.rotation.x = isFleeing ? 0.35 : 0.0;
+  currentAnimalRig.tailMidPivot.rotation.z = Math.cos(walkPhase * 0.8 + realTimeSec * 2.1) * 0.28;
+}
+
+// ── Camera View & Lighting Environment Controls ──────────────────────────────
+function setCameraPreset(preset) {
+  Sim.camPreset = preset;
+  document.querySelectorAll('.cam-preset-btn').forEach(b => {
+    if (b.id !== 'cam-btn-env') b.classList.remove('active');
+  });
+  const btn = document.getElementById(`cam-btn-${preset}`);
+  if (btn) btn.classList.add('active');
+
+  if (preset === 'orbit') {
+    externalCam.position.set(-2.4, 3.3, 6.2);
+    controls.target.set(-0.5, 0.9, -4.5);
+  } else if (preset === 'pole') {
+    externalCam.position.set(0.65, 2.35, 1.45);
+    controls.target.copy(Sim.animalPos);
+  } else if (preset === 'animal') {
+    const offset = new THREE.Vector3(1.6, 0.85, 2.1);
+    externalCam.position.copy(Sim.animalPos).add(offset);
+    controls.target.copy(Sim.animalPos);
+  }
+  controls.update();
+}
+
+function toggleLightingEnv() {
+  Sim.duskMode = !Sim.duskMode;
+  const btn = document.getElementById('cam-btn-env');
+  if (Sim.duskMode) {
+    btn.textContent = '🌙 Dusk Patrol';
+    btn.classList.add('active');
+    skyMat.map = createSkyDomeTexture(true);
+    skyMat.needsUpdate = true;
+    scene.background.setHex(0x1b2436);
+    scene.fog.color.setHex(0x1b2436);
+    ambLight.intensity = 0.36;
+    sunLight.intensity = 0.42;
+    sunLight.color.setHex(0xff9d6c);
+  } else {
+    btn.textContent = '☀ Golden Daylight';
+    btn.classList.remove('active');
+    skyMat.map = createSkyDomeTexture(false);
+    skyMat.needsUpdate = true;
+    scene.background.setHex(0xc8d9eb);
+    scene.fog.color.setHex(0xc8d9eb);
+    ambLight.intensity = 0.78;
+    sunLight.intensity = 1.15;
+    sunLight.color.setHex(0xfff3d6);
+  }
+}
 
 // ── Helper: Active Camera ID ────────────────────────────────────────────────
 function getCameraId() {
@@ -1245,7 +2644,7 @@ function connectWebSocket() {
   wsUrl += `/ws/${encodeURIComponent(camId)}?api_key=${encodeURIComponent(apiKey)}`;
 
   if (Sim.ws && (Sim.ws.readyState === WebSocket.CONNECTING || Sim.ws.readyState === WebSocket.OPEN)) {
-    if (Sim.ws._targetUrl === wsUrl) return; // already connected to this URL
+    if (Sim.ws._targetUrl === wsUrl) return;
     try { Sim.ws.close(); } catch (_) {}
   }
 
@@ -1261,9 +2660,7 @@ function connectWebSocket() {
         pill.textContent = `WS: Connected (${camId})`;
         pill.className = 'pill active';
       }
-      // 1. Send reset on WS open (matches real firmware)
       sendWsReset();
-      // 2. Send status BOOT
       sendWsStatus('BOOT', 'Simulator Connected');
     };
 
@@ -1271,10 +2668,9 @@ function connectWebSocket() {
       if (typeof event.data !== 'string') return;
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'ping') return; // backend keepalive
+        if (data.type === 'ping') return;
 
         if (data.type === 'simulate_pir') {
-          // Monitor dashboard Simulate PIR button clicked!
           Sim.systemActive = true;
           Sim.activeHoldTimer = 6.0;
           sendWsStatus('ACTIVE', 'Motion detected (Simulate PIR from monitor)');
@@ -1282,7 +2678,6 @@ function connectWebSocket() {
         }
 
         if (data.type === 'simulate_idle') {
-          // Monitor dashboard Simulate IDLE button clicked!
           Sim.systemActive = false;
           Sim.activeHoldTimer = 0;
           sendWsStatus('IDLE', 'Forced IDLE from monitor');
@@ -1292,7 +2687,6 @@ function connectWebSocket() {
           return;
         }
 
-        // Inference result push from backend
         if (data.pan !== undefined || data.movement !== undefined) {
           applyBackendResult(data);
         }
@@ -1427,15 +2821,21 @@ function computeAnimalPositionAtTime(t) {
 async function executeSimulationStep(targetTime, dt) {
   Sim.currentTime = Math.max(0, Math.min(Sim.maxTime, targetTime));
 
-  // 1. Compute animal position from timeline
+  // 1. Compute animal position and tangent heading from timeline
   const pos = computeAnimalPositionAtTime(Sim.currentTime);
+  const lookAheadT = Math.min(Sim.maxTime, Sim.currentTime + 0.08);
+  const nextPos = computeAnimalPositionAtTime(lookAheadT > Sim.currentTime ? lookAheadT : Sim.currentTime - 0.08);
+  const dx = lookAheadT > Sim.currentTime ? (nextPos.x - pos.x) : (pos.x - nextPos.x);
+  const dz = lookAheadT > Sim.currentTime ? (nextPos.z - pos.z) : (pos.z - nextPos.z);
+
   Sim.animalPos.x = pos.x;
   Sim.animalPos.z = pos.z;
   animalRoot.position.copy(Sim.animalPos);
 
-  if (animalMesh) {
-    animalMesh.scale.x = Sim.currentTime < 5.0 ? -1 : 1;
+  if (Math.hypot(dx, dz) > 0.0001) {
+    Sim.animalHeading = Math.atan2(dx, dz);
   }
+  animalRoot.rotation.y = Sim.animalHeading;
 
   // 2. Evaluate PIR Motion Sensor (at post x=0, z=0, looking -Z)
   const dist = Math.hypot(Sim.animalPos.x, Sim.animalPos.z);
@@ -1450,6 +2850,8 @@ async function executeSimulationStep(targetTime, dt) {
     Sim.systemActive = true;
     Sim.activeHoldTimer = 6.0;
     pirLedMat.color.setHex(0xc94a44);
+    pirConeMat.color.setHex(0xe05246);
+    pirGroundMat.color.setHex(0xe05246);
     document.getElementById('pir-hud-badge').className = 'pir-badge triggered';
     document.getElementById('pir-hud-badge').innerHTML = `<span>Motion Triggered (${dist.toFixed(1)}m)</span>`;
     document.getElementById('pkt-pir').textContent = `TRIGGERED (${dist.toFixed(1)}m)`;
@@ -1460,6 +2862,8 @@ async function executeSimulationStep(targetTime, dt) {
     }
   } else {
     pirLedMat.color.setHex(0x4e8a56);
+    pirConeMat.color.setHex(0xe5a93b);
+    pirGroundMat.color.setHex(0xe5a93b);
     document.getElementById('pir-hud-badge').className = 'pir-badge';
     document.getElementById('pir-hud-badge').innerHTML = `<span>PIR Standby (${dist.toFixed(1)}m)</span>`;
     document.getElementById('pkt-pir').textContent = `CLEAR (${dist.toFixed(1)}m)`;
@@ -1478,12 +2882,14 @@ async function executeSimulationStep(targetTime, dt) {
   }
 
   // 3. Update Directional Spotlight & Camera Power
-  // Clean natural spotlight intensity: 2.2 (when active), 0 (when sleep)
   const relayEl = document.getElementById('relay-status');
   if (Sim.systemActive) {
     Sim.directionalLightOn = true;
     Sim.cameraActive = true;
-    dirSpotlight.intensity = 2.2;
+    dirSpotlight.intensity = Sim.duskMode ? 3.2 : 2.2;
+    spotEmitterMat.color.setHex(0xfffce0);
+    volBeamMat.opacity = Sim.duskMode ? 0.16 : 0.08;
+    relayLedMat.color.setHex(0xff7722);
 
     if (relayEl) {
       relayEl.textContent = 'CLOSED (12V ON)';
@@ -1500,6 +2906,9 @@ async function executeSimulationStep(targetTime, dt) {
     Sim.directionalLightOn = false;
     Sim.cameraActive = false;
     dirSpotlight.intensity = 0.0;
+    spotEmitterMat.color.setHex(0x33332a);
+    volBeamMat.opacity = 0.0;
+    relayLedMat.color.setHex(0x445544);
 
     if (relayEl) {
       relayEl.textContent = 'OPEN (STANDBY)';
@@ -1610,10 +3019,10 @@ async function pollActionOnce() {
     if (res.ok) {
       const data = await res.json();
       if (data.action && data.action !== 'none' && data.action !== 'CONTINUE_SWEEP') {
-        if (data.action === 'BARK_SOUND') {
-          playSoundFromBackend('BARK_SOUND');
-          triggerStrobeFlash(0.3);
-        } else if (data.action === 'FLASH_LIGHT') {
+        if (DFPLAYER_TRACK_MAP[data.action]) {
+          playSoundFromBackend(data.action);
+        }
+        if (data.action === 'FLASH_LIGHT' || (Array.isArray(data.secondary_actions) && data.secondary_actions.includes('FLASH_LIGHT'))) {
           triggerStrobeFlash(1.0);
         }
       }
@@ -1621,7 +3030,6 @@ async function pollActionOnce() {
   } catch (_) {}
 }
 
-// Start polling engines: 80ms fast servo tracking, 400ms slow action checking (for HTTP mode)
 if (!servoPollTimer) servoPollTimer = setInterval(pollServoOnce, 80);
 if (!actionPollTimer) actionPollTimer = setInterval(pollActionOnce, 400);
 
@@ -1642,7 +3050,6 @@ async function processFrameStep() {
       try {
         const blob = await new Promise(res => camCanvas.toBlob(res, 'image/jpeg', 0.85));
         if (blob) {
-          // Text metadata first: matches ESP32-CAM ws_client.cpp cameraTask
           const meta = {
             type: 'frame',
             seq: Sim.frameIndex,
@@ -1652,7 +3059,6 @@ async function processFrameStep() {
             h: 480,
           };
           Sim.ws.send(JSON.stringify(meta));
-          // Immediately send raw JPEG binary frame
           Sim.ws.send(blob);
 
           document.getElementById('pkt-status').textContent = `WS SENT (#${Sim.frameIndex}, ${(blob.size / 1024).toFixed(1)}KB)`;
@@ -1716,7 +3122,7 @@ async function processFrameStep() {
 
 // ── Exact Local Emulation of servo_math.py & state.py ────────────────────────
 function runLocalBackendMath(capturePan, captureTilt) {
-  // Project animal 3D position into sensor camera pixel coordinates
+  // Project animal 3D torso center (y=0.45) into sensor camera pixel coordinates
   const projected = Sim.animalPos.clone().project(sensorCam);
 
   // Check if target is in front of camera and inside the 640x480 frame
@@ -1726,14 +3132,15 @@ function runLocalBackendMath(capturePan, captureTilt) {
     const cx = ((projected.x + 1.0) / 2.0) * 640;
     const cy = ((-projected.y + 1.0) / 2.0) * 480;
 
-    const boxW = Math.max(70, Math.min(220, (1.8 / -Sim.animalPos.z) * 640));
-    const boxH = boxW * 0.75;
+    const spScale = (SPECIES_CATALOG[Sim.species]?.scale || 1.0);
+    const boxW = Math.max(70, Math.min(230, ((1.85 * spScale) / -Sim.animalPos.z) * 640));
+    const boxH = boxW * 0.76;
     const bbox = [cx - boxW / 2, cy - boxH / 2, cx + boxW / 2, cy + boxH / 2];
 
     const det = {
       class_id: 6,
       class_name: Sim.species,
-      confidence: 0.92,
+      confidence: 0.94,
       bbox: bbox,
       bbox_center: [cx, cy],
     };
@@ -1783,10 +3190,32 @@ function runLocalBackendMath(capturePan, captureTilt) {
       }
     }
 
-    // JEV Deterrent Decision (at t >= 4.5s trigger BARK_SOUND)
+    // JEV Deterrent Decision (at t >= 4.5s trigger species-appropriate deterrent)
     let action = 'none';
+    let secondaryActions = [];
     if (Sim.currentTime >= 4.5 && Sim.cameraState.action_frames_remaining === 0) {
-      action = 'BARK_SOUND';
+      const LOCAL_JEV_MAP = {
+        'AmurTiger':   { primary: 'SOUND_HUMAN_SHOUT',   secondary: ['FLASH_LIGHT', 'ALERT_OWNER'] },
+        'Leopard':     { primary: 'SOUND_HUMAN_SHOUT',   secondary: ['FLASH_LIGHT', 'ALERT_OWNER'] },
+        'BlackBear':   { primary: 'SOUND_DOG_BARK',      secondary: ['FLASH_LIGHT', 'ALERT_OWNER'] },
+        'WildBoar':    { primary: 'SOUND_DOG_BARK',      secondary: ['FLASH_LIGHT'] },
+        'LeopardCat':  { primary: 'SOUND_DOG_BARK',      secondary: [] },
+        'RedFox':      { primary: 'SOUND_DOG_BARK',      secondary: [] },
+        'RaccoonDog':  { primary: 'SOUND_DOG_BARK',      secondary: [] },
+        'Badger':      { primary: 'SOUND_RAPTOR_SCREECH', secondary: [] },
+        'Sable':       { primary: 'SOUND_RAPTOR_SCREECH', secondary: [] },
+        'Weasel':      { primary: 'SOUND_RAPTOR_SCREECH', secondary: [] },
+        'Y-T-Marten':  { primary: 'SOUND_RAPTOR_SCREECH', secondary: [] },
+        'Hare':        { primary: 'SOUND_RAPTOR_SCREECH', secondary: [] },
+        'SikaDeer':    { primary: 'SOUND_WOLF_HOWL',     secondary: [] },
+        'RoeDeer':     { primary: 'SOUND_WOLF_HOWL',     secondary: [] },
+        'MuskDeer':    { primary: 'SOUND_WOLF_HOWL',     secondary: [] },
+        'Dog':         { primary: 'SOUND_FRIENDLY_VOICE', secondary: [] },
+        'Cow':         { primary: 'SOUND_FRIENDLY_VOICE', secondary: [] },
+      };
+      const dec = LOCAL_JEV_MAP[Sim.species] || { primary: 'SOUND_DOG_BARK', secondary: [] };
+      action = dec.primary;
+      secondaryActions = dec.secondary;
     }
 
     // Update in-memory CameraState (state.py: update_detected)
@@ -1812,6 +3241,7 @@ function runLocalBackendMath(capturePan, captureTilt) {
     applyBackendResult({
       phase: 'tracking',
       action: action,
+      secondary_actions: secondaryActions,
       movement: { pan_absolute: targetPan, tilt_absolute: targetTilt, skip: skip },
       detection: det,
       inference_ms: 88.5,
@@ -1973,11 +3403,18 @@ function applyBackendResult(data) {
     }
   }
 
-  // Deterrent Action
-  if (action === 'BARK_SOUND') {
-    playSoundFromBackend('BARK_SOUND');
-    triggerStrobeFlash(0.3);
-  } else if (action === 'FLASH_LIGHT') {
+  // Deterrent Action (matches firmware ws_client.cpp)
+  if (action && action !== 'none' && action !== 'CONTINUE_SWEEP') {
+    if (DFPLAYER_TRACK_MAP[action]) {
+      playSoundFromBackend(action);
+    }
+  }
+
+  // Visual Deterrent (Spotlight Relay)
+  const isFlash = action === 'FLASH_LIGHT' ||
+                  Boolean(data.flash) ||
+                  (Array.isArray(data.secondary_actions) && data.secondary_actions.includes('FLASH_LIGHT'));
+  if (isFlash) {
     triggerStrobeFlash(1.0);
   }
 
@@ -2087,7 +3524,7 @@ function renderSensorFrame() {
     hudCtx.strokeRect(x1, y1, w, h);
 
     hudCtx.fillStyle = '#e07a3c';
-    hudCtx.fillRect(x1, Math.max(0, y1 - 20), 160, 20);
+    hudCtx.fillRect(x1, Math.max(0, y1 - 20), 165, 20);
     hudCtx.fillStyle = '#fff';
     hudCtx.font = 'bold 11px system-ui, sans-serif';
     hudCtx.fillText(`${det.class_name} ${(det.confidence * 100).toFixed(1)}%`, x1 + 6, Math.max(14, y1 - 6));
@@ -2102,10 +3539,12 @@ function renderSensorFrame() {
 
 function triggerStrobeFlash(intensity = 1.0) {
   document.getElementById('screen-strobe').classList.add('active');
-  dirSpotlight.intensity = 3.5 * intensity;
+  dirSpotlight.intensity = 4.2 * intensity;
+  volBeamMat.opacity = 0.28;
   setTimeout(() => {
     document.getElementById('screen-strobe').classList.remove('active');
-    dirSpotlight.intensity = Sim.directionalLightOn ? 2.2 : 0.0;
+    dirSpotlight.intensity = Sim.directionalLightOn ? (Sim.duskMode ? 3.2 : 2.2) : 0.0;
+    volBeamMat.opacity = Sim.directionalLightOn ? (Sim.duskMode ? 0.16 : 0.08) : 0.0;
   }, 140);
 }
 
@@ -2125,6 +3564,30 @@ function renderLoop() {
 
   // Update physical servos smoothly on every frame (independent of play state)
   updateServoSlew(dt);
+
+  // Animate 3D articulated animal gait, breathing, ear twitches & tail sway
+  updateAnimalBiomechanics(Sim.currentTime, now * 0.001);
+
+  // Follow animal if camera preset is 'animal' or 'pole'
+  if (Sim.camPreset === 'animal' || Sim.camPreset === 'pole') {
+    controls.target.lerp(Sim.animalPos, 0.12);
+  }
+
+  // Animate expanding 3D acoustic rings from deterrent speaker
+  for (let i = acousticRingWaves.length - 1; i >= 0; i--) {
+    const w = acousticRingWaves[i];
+    w.age += dt;
+    w.mesh.position.lerp(Sim.animalPos, dt * 3.8);
+    const scale = 1.0 + w.age * 16.0;
+    w.mesh.scale.set(scale, scale, 1);
+    w.mesh.material.opacity = Math.max(0, 0.85 * (1 - w.age * 1.3));
+    if (w.age >= 0.75) {
+      scene.remove(w.mesh);
+      w.mesh.geometry.dispose();
+      w.mesh.material.dispose();
+      acousticRingWaves.splice(i, 1);
+    }
+  }
 
   controls.update();
 
@@ -2201,7 +3664,8 @@ function setSpeed(spd, btn) {
 
 function onSpeciesChange(species) {
   Sim.species = species;
-  updateAnimalBillboard();
+  rebuildAnimalForSpecies();
+  executeSimulationStep(Sim.currentTime, 0.01);
 }
 
 // Window resize handler

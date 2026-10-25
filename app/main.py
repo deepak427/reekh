@@ -44,7 +44,7 @@ import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from app.config import (
     ACTION_DEBOUNCE_FRAMES,
@@ -783,6 +783,24 @@ async def monitor_stream():
     )
 
 
+# ── Deterrent Sound Audio Files ───────────────────────────────────────────────
+
+@app.get("/sounds/{track}", response_class=FileResponse)
+@app.get("/audio/{track}", response_class=FileResponse)
+def get_sound_track(track: str):
+    """Serve deterrence audio tracks (0001.mp3 to 0005.mp3)."""
+    track_name = Path(track).name
+    candidates = [
+        _APP_DIR / "sounds" / track_name,
+        _SVC_ROOT / "sounds" / track_name,
+        _SVC_ROOT.parent / track_name,
+    ]
+    for p in candidates:
+        if p.exists() and p.is_file():
+            return FileResponse(p, media_type="audio/mpeg")
+    raise HTTPException(status_code=404, detail="Sound file not found")
+
+
 # ── Monitor & Simulator UI ───────────────────────────────────────────────────
 
 @app.get("/simulate", response_class=HTMLResponse)
@@ -790,6 +808,7 @@ async def monitor_stream():
 def simulator_ui():
     """Serves the 3D Agricultural Surveillance Simulator & State Inspector."""
     for p in [
+        _SVC_ROOT.parent / "agricultural_surveillance_simulator_state_inspector.html",
         Path(__file__).resolve().parent / "web" / "simulator.html",
         Path(__file__).resolve().parent / "simulator.html",
         Path(__file__).resolve().parent.parent / "simulator.html",
