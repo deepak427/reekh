@@ -512,7 +512,7 @@ pre.state-box {
         <div class="field">
           <label>Species</label>
           <select id="sel-species" onchange="onSpeciesChange(this.value)">
-            <option value="Leopard" selected>Amur Leopard (Class 6)</option>
+            <option value="Leopard">Amur Leopard (Class 6)</option>
             <option value="AmurTiger">Amur Tiger (Class 0)</option>
             <option value="Badger">Badger (Class 1)</option>
             <option value="BlackBear">Black Bear (Class 2)</option>
@@ -522,7 +522,7 @@ pre.state-box {
             <option value="LeopardCat">Leopard Cat (Class 7)</option>
             <option value="MuskDeer">Musk Deer (Class 8)</option>
             <option value="RaccoonDog">Raccoon Dog (Class 9)</option>
-            <option value="RedFox">Red Fox (Class 10)</option>
+            <option value="RedFox" selected>Red Fox (Class 10)</option>
             <option value="RoeDeer">Roe Deer (Class 11)</option>
             <option value="Sable">Sable (Class 12)</option>
             <option value="SikaDeer">Sika Deer (Class 13)</option>
@@ -630,7 +630,7 @@ pre.state-box {
           <button type="button" class="cam-preset-btn" id="cam-btn-animal" onclick="setCameraPreset('animal')">Animal Close-Up</button>
           <button type="button" class="cam-preset-btn" id="cam-btn-pole" onclick="setCameraPreset('pole')">Gimbal Over-Shoulder</button>
           <span style="width:1px; height:14px; background:var(--border);"></span>
-          <button type="button" class="cam-preset-btn" id="cam-btn-env" onclick="toggleLightingEnv()">☀ Golden Daylight</button>
+          <button type="button" class="cam-preset-btn active" id="cam-btn-env" onclick="toggleLightingEnv()">🌙 Dusk Patrol</button>
         </div>
       </div>
 
@@ -950,7 +950,7 @@ const Sim = {
   slewRate: 280.0, // deg/sec physical servo speed
 
   // Wildlife Target (y=0.45 is torso center for sensorCam projection)
-  species: 'Leopard',
+  species: 'RedFox',
   animalPos: new THREE.Vector3(-4.0, 0.45, -10.0), // starts outside 8m at t=0
   animalHeading: 0.55,
   animalSpeed: 1.8,
@@ -978,14 +978,14 @@ const Sim = {
 
   // View & Environment Presets
   camPreset: 'orbit',
-  duskMode: false,
+  duskMode: true,
 };
 
 // ── Three.js 3D Virtual Scene Setup (PBR + ToneMapping + Soft Shadows) ───────
 const sceneBox = document.getElementById('scene3d-box');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xc8d9eb);
-scene.fog = new THREE.FogExp2(0xc8d9eb, 0.012);
+scene.background = new THREE.Color(0x1b2436);
+scene.fog = new THREE.FogExp2(0x1b2436, 0.012);
 
 // External Camera & OrbitControls (sees layer 0, layer 1 helpers, layer 2 hardware)
 const externalCam = new THREE.PerspectiveCamera(42, sceneBox.clientWidth / sceneBox.clientHeight, 0.1, 160);
@@ -1164,12 +1164,12 @@ function createSkyDomeTexture(isDusk = false) {
 }
 
 // ── Environment Lighting & Sky Dome ──────────────────────────────────────────
-const ambLight = new THREE.HemisphereLight(0xfffcf2, 0x4b5e40, 0.78);
+const ambLight = new THREE.HemisphereLight(0xfffcf2, 0x4b5e40, 0.36);
 ambLight.layers.enable(0);
 ambLight.layers.enable(2);
 scene.add(ambLight);
 
-const sunLight = new THREE.DirectionalLight(0xfff3d6, 1.15);
+const sunLight = new THREE.DirectionalLight(0xff9d6c, 0.42);
 sunLight.position.set(14, 22, 12);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.width = 2048;
@@ -1196,7 +1196,7 @@ scene.add(fillLight);
 // Sky Dome (Layer 0)
 const skyGeo = new THREE.SphereGeometry(95, 32, 20);
 const skyMat = new THREE.MeshBasicMaterial({
-  map: createSkyDomeTexture(false),
+  map: createSkyDomeTexture(true),
   side: THREE.BackSide,
   depthWrite: false,
 });
