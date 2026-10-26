@@ -110,24 +110,28 @@ The production service runs on an **AWS EC2 `t4g.medium`** instance:
 ssh -i ~/.ssh/your-key.pem ubuntu@<ec2-ip-address>
 
 # 2. Clone repository & enter service folder
-git clone https://github.com/your-username/opencv-dnn-example.git
-cd opencv-dnn-example/inference_service
+git clone https://github.com/deepak427/reekh.git
+cd reekh/inference_service
 
-# 3. Run automated setup script
+# 3. Download model weights (if not using automated setup script)
+mkdir -p models
+curl -L -o models/inference_model.onnx "https://github.com/deepak427/reekh/releases/download/weights/inference_model.onnx"
+
+# 4. Run automated setup script (auto-provisions dependencies, downloads model if missing, sets systemd)
 chmod +x deploy/setup_ec2.sh
 ./deploy/setup_ec2.sh
 
-# 4. Verify service status
+# 5. Verify service status
 sudo systemctl status wildlife-inference.service
 ```
 
-The script automatically detects standard Ubuntu ARM64, provisions a Python virtual environment, installs pinned dependencies, configures systemd, and starts the service.
+The script automatically detects standard Ubuntu ARM64, provisions a Python virtual environment, installs pinned dependencies, downloads model weights if missing, configures systemd, and starts the service.
 
 ### Alternative Target: AWS COOL AMI (Pre-compiled OpenCV 5.1)
 
 If using the official AWS COOL (Computer Vision on AWS) AMI with pre-compiled OpenCV 5.1:
 ```bash
-cd /home/ubuntu/inference_service
+cd /home/ubuntu/reekh/inference_service
 chmod +x deploy/setup_ec2.sh
 ./deploy/setup_ec2.sh
 ```
@@ -137,6 +141,16 @@ chmod +x deploy/setup_ec2.sh
 
 A hardened multi-stage Docker setup running as non-root user (`appuser`, UID 1000) with container `HEALTHCHECK`:
 ```bash
+# 1. Enter service directory
+cd reekh/inference_service
+
+# 2. Download model weights
+mkdir -p models
+curl -L -o models/inference_model.onnx "https://github.com/deepak427/reekh/releases/download/weights/inference_model.onnx"
+
+# 3. Setup environment and build
+cp .env.example .env
+mkdir -p logs
 docker compose up -d --build
 docker compose ps
 docker compose logs -f

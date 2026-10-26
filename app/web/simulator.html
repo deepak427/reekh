@@ -585,7 +585,7 @@ pre.state-box {
         <div class="field">
           <label>Backend URL</label>
           <div style="display:flex; gap:6px;">
-            <input type="url" id="cfg-url" value="" placeholder="http://localhost:8000" style="flex:1;" />
+            <input type="url" id="cfg-url" value="" placeholder="https://lightbox-singh-forward-plays.trycloudflare.com" style="flex:1;" />
             <button type="button" onclick="checkBackendHealth()" style="padding:4px 10px; font-weight:700; cursor:pointer; background:var(--primary); color:#fff; border:none; border-radius:4px;">Connect</button>
           </div>
         </div>
@@ -2766,7 +2766,7 @@ const urlInput = document.getElementById('cfg-url');
 if (urlInput) {
   if (!urlInput.value) {
     const origin = window.location.origin;
-    urlInput.value = (origin && origin !== 'null' && !origin.startsWith('file:')) ? origin : 'http://localhost:8000';
+    urlInput.value = (origin && origin !== 'null' && !origin.startsWith('file:')) ? origin : 'https://lightbox-singh-forward-plays.trycloudflare.com';
   }
   urlInput.addEventListener('input', checkBackendHealth);
   urlInput.addEventListener('change', checkBackendHealth);

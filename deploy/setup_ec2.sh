@@ -3,7 +3,8 @@ set -e
 
 echo "=== Setting up Wildlife Inference Service on AWS EC2 (t4g.medium / Graviton ARM64) ==="
 
-SVC_DIR="/home/ubuntu/inference_service"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SVC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SVC_DIR"
 
 # 1. Detect Python Environment: COOL AMI vs Standard Ubuntu ARM64
@@ -42,7 +43,14 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# 5. Create logs directory
+# 5. Download model weights if missing
+mkdir -p models
+if [ ! -f models/inference_model.onnx ]; then
+    echo "--- Downloading RF-DETR ONNX model weights from GitHub Releases ---"
+    curl -L -o models/inference_model.onnx "https://github.com/deepak427/reekh/releases/download/weights/inference_model.onnx"
+fi
+
+# 6. Create logs directory
 mkdir -p logs
 
 # 6. Configure Systemd Service dynamically based on environment

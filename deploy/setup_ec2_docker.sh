@@ -3,7 +3,8 @@ set -e
 
 echo "=== Setting up Wildlife Inference Service with Docker + Systemd on AWS Graviton ==="
 
-SVC_DIR="/home/ubuntu/inference_service"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SVC_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SVC_DIR"
 
 # 1. Update OS and install Docker + Docker Compose
@@ -22,21 +23,44 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# 4. Create logs directory
+# 4. Download model weights if not present
+mkdir -p models
+if [ ! -f models/inference_model.onnx ]; then
+    echo "--- Downloading RF-DETR ONNX model weights from GitHub Releases ---"
+    curl -L -o models/inference_model.onnx "https://github.com/deepak427/reekh/releases/download/weights/inference_model.onnx"
+fi
+
+# 5. Create logs directory
 mkdir -p logs
 
-# 5. Build and launch container via Docker Compose
+# 6. Build and launch container via Docker Compose
 echo "--- Building and launching container ---"
 sudo docker compose build
 sudo docker compose up -d
 
-# 6. Install and enable Systemd service for auto-start across reboots
+# 7. Install and enable Systemd service for auto-start across reboots
 echo "--- Configuring Systemd Service ---"
-sudo cp deploy/wildlife-inference-docker.service /etc/systemd/system/wildlife-inference-docker.service
+cat <<EOF | sudo tee /etc/systemd/system/wildlife-inference-docker.service > /dev/null
+[Unit]
+Description=Wildlife Inference Service (Docker Compose)
+Requires=docker.service
+After=docker.service network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$SVC_DIR
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable wildlife-inference-docker.service
 
-# 7. Verification
+# 8. Verification
 echo "--- Waiting for service warmup ---"
 sleep 5
 sudo docker ps
